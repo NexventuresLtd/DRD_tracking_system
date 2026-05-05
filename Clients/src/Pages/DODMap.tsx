@@ -10,35 +10,27 @@ import {
   useMapEvents,
   useMap,
   Tooltip,
-  LayersControl,
 } from "react-leaflet";
 import L from "leaflet";
 import {
-  FiWifi, FiWifiOff, FiUsers, FiAlertTriangle, FiClock,
-  FiChevronDown, FiChevronUp, FiMapPin, FiActivity,
+  FiWifiOff, FiUsers, FiAlertTriangle, FiClock,
+  FiChevronDown, FiMapPin, FiActivity,
   FiNavigation, FiMessageSquare, FiFilter, FiRefreshCw,
   FiSettings, FiDownload, FiSend, FiX, FiCheck,
-  FiPlus, FiMinus, FiCrosshair, FiLayers, FiFlag,
-  FiShield, FiZap, FiEye, FiEyeOff, FiInfo,
-  FiAlertCircle, FiCheckCircle, FiRadio,
-  FiUser, FiBell, FiBellOff, FiMaximize2, FiEdit2,
-  FiTrash2, FiArrowRight, FiHome, FiTruck, FiMap,
-  FiCompass, FiGlobe, FiChevronLeft, FiChevronRight,
-  FiMenu, FiTarget, FiHexagon, FiCircle, FiSquare,
-  FiTriangle, FiStar, FiMoreHorizontal, FiMove,
-  FiZoomIn, FiZoomOut, FiLock, FiUnlock, FiCamera,
-  FiVideo, FiMic, FiVolume2, FiWifi as FiSignal,
-  FiBattery, FiBatteryCharging, FiSun, FiMoon,
-  FiCloud, FiCloudRain, FiCloudSnow, FiWind,
+  FiPlus, FiMinus, FiCrosshair, FiFlag,
+  FiShield, FiZap, FiEye,
+  FiAlertCircle, FiCheckCircle,
+  FiUser, FiBell, FiMaximize2, FiArrowRight, FiHome, FiTruck, FiMap,
+  FiChevronLeft, FiChevronRight,
+  FiMenu, FiHexagon, FiLock, FiMoon,
 } from "react-icons/fi";
 import {
-  MdOutlineLocationOn, MdOutlineSos, MdOutlineSecurity,
-  MdOutlineDirections, MdLocalHospital, MdDirectionsCar,
-  MdSatellite, Md3dRotation, MdFullscreen, MdFullscreenExit,
-  MdLocalPolice, MdStore, MdTerrain, MdLayers,
+  MdLocalHospital, MdDirectionsCar,
+  MdSatellite,
+  MdLocalPolice, MdTerrain, MdLayers,
 } from "react-icons/md";
 import { BiTargetLock } from "react-icons/bi";
-import { TbRoute, TbBuildingHospital, TbBuildingFortress } from "react-icons/tb";
+import { TbRoute, TbBuildingHospital } from "react-icons/tb";
 import "leaflet-routing-machine";
 import * as api from "../services/api";
 import { connectAll, disconnectAll, locationWS, messageWS, eventWS } from "../services/ws";
@@ -130,17 +122,17 @@ interface POI {
   shape?: TacticalShape;
 }
 
-interface Zone {
-  id: string;
-  name: string;
-  type: "perimeter" | "sector" | "corridor" | "extraction" | "danger" | "safe";
-  coordinates: [number, number][];
-  color: string;
-  assignedTeams: string[];
-  assignedUsers: string[];
-  createdAt: Date;
-  description?: string;
-}
+// interface Zone {
+//   id: string;
+//   name: string;
+//   type: "perimeter" | "sector" | "corridor" | "extraction" | "danger" | "safe";
+//   coordinates: [number, number][];
+//   color: string;
+//   assignedTeams: string[];
+//   assignedUsers: string[];
+//   createdAt: Date;
+//   description?: string;
+// }
 
 interface TeamInfo {
   id: string;
@@ -318,23 +310,23 @@ function formatTime(d: Date): string {
 function getTacticalShapeSVG(shape: TacticalShape, color: string, size: number = 24): string {
   switch (shape) {
     case "circle":
-      return `<svg width="${size}" height="${size}"><circle cx="${size/2}" cy="${size/2}" r="${size/2-2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "square":
-      return `<svg width="${size}" height="${size}"><rect x="2" y="2" width="${size-4}" height="${size-4}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><rect x="2" y="2" width="${size - 4}" height="${size - 4}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "triangle":
-      return `<svg width="${size}" height="${size}"><polygon points="${size/2},2 ${size-2},${size-2} 2,${size-2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><polygon points="${size / 2},2 ${size - 2},${size - 2} 2,${size - 2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "diamond":
       const mid = size / 2;
-      return `<svg width="${size}" height="${size}"><polygon points="${mid},2 ${size-2},${mid} ${mid},${size-2} 2,${mid}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><polygon points="${mid},2 ${size - 2},${mid} ${mid},${size - 2} 2,${mid}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "hexagon":
       const hmid = size / 2;
-      return `<svg width="${size}" height="${size}"><polygon points="${hmid},2 ${size-3},${hmid*0.6} ${size-3},${size-hmid*0.6-2} ${hmid},${size-2} 3,${size-hmid*0.6-2} 3,${hmid*0.6}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><polygon points="${hmid},2 ${size - 3},${hmid * 0.6} ${size - 3},${size - hmid * 0.6 - 2} ${hmid},${size - 2} 3,${size - hmid * 0.6 - 2} 3,${hmid * 0.6}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "star":
       return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><polygon points="${size / 2},2 ${size * 0.62},${size * 0.38} ${size - 2},${size * 0.38} ${size * 0.68},${size * 0.6} ${size * 0.78},${size - 2} ${size / 2},${size * 0.74} ${size * 0.22},${size - 2} ${size * 0.32},${size * 0.6} 2,${size * 0.38} ${size * 0.38},${size * 0.38}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     case "cross":
       return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}"><path d="M${size * 0.42} 2h${size * 0.16}v${size * 0.42}H${size - 2}v${size * 0.16}H${size * 0.58}V${size - 2}H${size * 0.42}V${size * 0.58}H2V${size * 0.42}h${size * 0.4}V2z" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
     default:
-      return `<svg width="${size}" height="${size}"><circle cx="${size/2}" cy="${size/2}" r="${size/2-2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
+      return `<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2 - 2}" fill="${color}22" stroke="${color}" stroke-width="2"/></svg>`;
   }
 }
 
@@ -342,7 +334,7 @@ function createUserMarkerHTML(user: User, isSelected: boolean): string {
   const col = TEAM_COLORS[user.group].primary;
   const size = isSelected ? 40 : 32;
   const roleIcon = user.role ? ROLE_ICONS[user.role] || "" : "";
-  
+
   return `
     <div style="
       width: ${size}px;
@@ -370,7 +362,7 @@ function createUserMarkerHTML(user: User, isSelected: boolean): string {
 function createPOIMarkerHTML(poi: POI): string {
   const info = POI_ICONS_CONFIG[poi.type];
   const shape = poi.shape || "diamond";
-  
+
   return `
     <div style="
       width: 34px;
@@ -418,19 +410,19 @@ function createPOIIcon(poi: POI): L.DivIcon {
 
 // ─────────────────────────── COMPONENTS ───────────────────────────
 
-function StatusDot({ status }: { status: Status }) {
-  return (
-    <span
-      className="inline-block rounded-full flex-shrink-0"
-      style={{
-        width: 7,
-        height: 7,
-        backgroundColor: STATUS_COLORS[status],
-        boxShadow: status === "active" ? `0 0 6px ${STATUS_COLORS.active}` : "none",
-      }}
-    />
-  );
-}
+// function StatusDot({ status }: { status: Status }) {
+//   return (
+//     <span
+//       className="inline-block rounded-full flex-shrink-0"
+//       style={{
+//         width: 7,
+//         height: 7,
+//         backgroundColor: STATUS_COLORS[status],
+//         boxShadow: status === "active" ? `0 0 6px ${STATUS_COLORS.active}` : "none",
+//       }}
+//     />
+//   );
+// }
 
 function PanelHeader({
   title,
@@ -506,9 +498,9 @@ function RoutePath({ route }: { route: Route }) {
         fitSelectedRoutes: false,
         lineOptions: {
           styles: [
-            { 
-              color: route.color, 
-              weight: route.isZone ? 1 : 4, 
+            {
+              color: route.color,
+              weight: route.isZone ? 1 : 4,
               opacity: route.isZone ? 0.5 : 0.8,
               dashArray: route.isZone ? "5 10" : undefined,
             }
@@ -538,7 +530,7 @@ function RoutePath({ route }: { route: Route }) {
 
 function TopBar({
   users,
-  sidebarOpen,
+  // sidebarOpen,
   onToggleSidebar,
   isConnected,
   onLogout,
@@ -637,8 +629,8 @@ function MapLegend() {
           {item.dot ? (
             <span className="inline-block rounded-full flex-shrink-0" style={{ width: 8, height: 8, backgroundColor: item.color }} />
           ) : (
-            <span 
-              className="inline-block flex-shrink-0" 
+            <span
+              className="inline-block flex-shrink-0"
               style={{ width: 12, height: 12 }}
               dangerouslySetInnerHTML={{ __html: getTacticalShapeSVG(item.shape!, item.color, 12) }}
             />
@@ -868,7 +860,7 @@ function AlertsPanel({
 }) {
   const alerts = useMemo(() => {
     const result: { user: User; msg: string; elapsed: string; severity: "high" | "medium" }[] = [];
-    
+
     users.filter(u => u.flag === "help").forEach(u => {
       result.unshift({ user: u, msg: `${u.name} requested SOS`, elapsed: formatElapsed(u.flagTime || u.lastUpdate), severity: "high" });
     });
@@ -879,7 +871,7 @@ function AlertsPanel({
       const sec = Math.floor((Date.now() - u.lastUpdate.getTime()) / 1000);
       result.push({ user: u, msg: `${u.name} stale ${sec}s`, elapsed: `${sec}s`, severity: "medium" });
     });
-    
+
     return result;
   }, [users]);
 
@@ -1933,12 +1925,12 @@ const ROLE_COLORS: Record<string, string> = {
   operator: "#3b82f6", field_unit: "#22c55e", viewer: "#94a3b8",
 };
 const ROLE_GUIDE = [
-  { role: "field_unit",  color: "#22c55e", icon: <FiUser size={16} />, label: "Soldier",  desc: "Deployed soldier. Sends live GPS every 5 s, can trigger SOS, mark enemy positions, receive routes from command." },
-  { role: "commander",  color: "#8b5cf6", icon: <FiShield size={16} />, label: "Commander",   desc: "Full operational control. Draws routes & zones, manages teams, assigns missions, broadcasts messages, views all units." },
-  { role: "operator",   color: "#3b82f6", icon: <FiSettings size={16} />, label: "Operator",    desc: "Mission operations. Assigns tasks, monitors unit status, manages communications, generates reports." },
-  { role: "admin",      color: "#f97316", icon: <FiLock size={16} />, label: "Admin",       desc: "System administrator. Creates & manages all user accounts, system configuration, access control." },
-  { role: "super_admin",color: "#ef4444", icon: <FiShield size={16} />, label: "Super Admin", desc: "Unrestricted access. All admin + commander + operator capabilities combined." },
-  { role: "viewer",     color: "#94a3b8", icon: <FiEye size={16} />,  label: "Viewer",     desc: "Read-only. Can see the map, unit positions, events and reports — cannot interact or send any commands." },
+  { role: "field_unit", color: "#22c55e", icon: <FiUser size={16} />, label: "Soldier", desc: "Deployed soldier. Sends live GPS every 5 s, can trigger SOS, mark enemy positions, receive routes from command." },
+  { role: "commander", color: "#8b5cf6", icon: <FiShield size={16} />, label: "Commander", desc: "Full operational control. Draws routes & zones, manages teams, assigns missions, broadcasts messages, views all units." },
+  { role: "operator", color: "#3b82f6", icon: <FiSettings size={16} />, label: "Operator", desc: "Mission operations. Assigns tasks, monitors unit status, manages communications, generates reports." },
+  { role: "admin", color: "#f97316", icon: <FiLock size={16} />, label: "Admin", desc: "System administrator. Creates & manages all user accounts, system configuration, access control." },
+  { role: "super_admin", color: "#ef4444", icon: <FiShield size={16} />, label: "Super Admin", desc: "Unrestricted access. All admin + commander + operator capabilities combined." },
+  { role: "viewer", color: "#94a3b8", icon: <FiEye size={16} />, label: "Viewer", desc: "Read-only. Can see the map, unit positions, events and reports — cannot interact or send any commands." },
 ];
 
 function RolesGuideModal({ onClose }: { onClose: () => void }) {
@@ -2413,15 +2405,15 @@ function AssignTeamModal({
 const EVENT_TYPES = ["ALL", "UPDATE", "STALE", "OFFLINE", "ONLINE", "MESSAGE", "FLAG", "ROUTE", "POI", "ZONE", "ALERT"] as const;
 const TYPE_COLORS: Record<string, { color: string; bg: string }> = {
   UPDATE: { color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
-  STALE:  { color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
-  OFFLINE:{ color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
+  STALE: { color: "#f59e0b", bg: "rgba(245,158,11,0.12)" },
+  OFFLINE: { color: "#ef4444", bg: "rgba(239,68,68,0.12)" },
   ONLINE: { color: "#22c55e", bg: "rgba(34,197,94,0.12)" },
-  MESSAGE:{ color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
-  FLAG:   { color: "#a855f7", bg: "rgba(168,85,247,0.12)" },
-  ROUTE:  { color: "#06b6d4", bg: "rgba(6,182,212,0.12)" },
-  POI:    { color: "#f97316", bg: "rgba(249,115,22,0.12)" },
-  ZONE:   { color: "#ec4899", bg: "rgba(236,72,153,0.12)" },
-  ALERT:  { color: "#ef4444", bg: "rgba(239,68,68,0.15)" },
+  MESSAGE: { color: "#3b82f6", bg: "rgba(59,130,246,0.12)" },
+  FLAG: { color: "#a855f7", bg: "rgba(168,85,247,0.12)" },
+  ROUTE: { color: "#06b6d4", bg: "rgba(6,182,212,0.12)" },
+  POI: { color: "#f97316", bg: "rgba(249,115,22,0.12)" },
+  ZONE: { color: "#ec4899", bg: "rgba(236,72,153,0.12)" },
+  ALERT: { color: "#ef4444", bg: "rgba(239,68,68,0.15)" },
 };
 
 function AllEventsModal({ onClose }: { onClose: () => void }) {
@@ -2606,7 +2598,7 @@ export default function DODMap() {
   const [forceExpanded, setForceExpanded] = useState(false);
   const [assigningUserId, setAssigningUserId] = useState<string | null>(null);
   const [showAssignPicker, setShowAssignPicker] = useState(false);
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<any>(null);
   const [mapFlyTarget, setMapFlyTarget] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedPOIType, setSelectedPOIType] = useState<POIType>("checkpoint");
   const [pendingPOI, setPendingPOI] = useState<POI | null>(null);
@@ -2614,6 +2606,7 @@ export default function DODMap() {
   const [mapView, setMapView] = useState<MapViewType>("standard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  setIsFullscreen(document.fullscreenElement != null);
   const [isConnected, setIsConnected] = useState(false);
   const [browserPosition, setBrowserPosition] = useState<{ lat: number; lng: number } | null>(null);
   const isConnectedRef = useRef(false);
@@ -2659,6 +2652,7 @@ export default function DODMap() {
       ]);
 
       const refreshedRoutes: Route[] = ((routesRes.data ?? []) as Array<{
+        is_active: any;
         id: string; name: string; assigned_user_id?: string; assigned_team_id?: string;
         waypoints: Array<{ latitude: number; longitude: number; label?: string; poi_type?: string }>;
         created_at: string; color: string; meeting_point: boolean;
@@ -2828,7 +2822,7 @@ export default function DODMap() {
               const loc = res.value.data;
               const u = unlocatedUsers[i];
               const uInfo = usersInfo.get(String(u.id)) ?? { name: u.full_name };
-              const teamName = "Team Alpha";
+              // const teamName = "Team Alpha";
               frontendUsers.push({
                 user_id: String(u.id),
                 name: uInfo.name,
@@ -2947,6 +2941,7 @@ export default function DODMap() {
       // Events + flag alerts
       if (eventsRes.status === "fulfilled") {
         const rawEvents = eventsRes.value.data.items as Array<{
+          severity: string;
           id: string; event_type: string; user_id?: string;
           description: string; created_at: string;
           location_lat?: number; location_lng?: number;
@@ -3089,6 +3084,7 @@ export default function DODMap() {
     const unsubLoc = locationWS.subscribe((msg: unknown) => {
       const m = msg as { type?: string; data?: Record<string, unknown> } & Record<string, unknown>;
       const d = (m.data ?? m) as {
+        team_id(team_id: any): string;
         user_id?: string; latitude?: number; longitude?: number;
         speed?: number; heading?: number; status?: string; recorded_at?: string;
       };
@@ -3339,7 +3335,7 @@ export default function DODMap() {
     if (routeDrawMode || zoneMode) {
       const label = zoneMode ? `ZP${pendingRoute.length + 1}` : `${POI_ICONS_CONFIG[selectedPOIType].tacticalIcon}${pendingRoute.length + 1}`;
       setPendingRoute(prev => [...prev, { lat, lng, label, type: selectedPOIType }]);
-      
+
       if (pendingRoute.length === 0 && routeDrawMode) {
         const newPOI: POI = {
           id: `poi_${Date.now()}`,
@@ -3577,7 +3573,7 @@ export default function DODMap() {
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         isConnected={isConnected}
         onLogout={() => {
-          api.logout().catch(() => {});
+          api.logout().catch(() => { });
           localStorage.removeItem("access_token");
           localStorage.removeItem("refresh_token");
           disconnectAll();
@@ -3718,13 +3714,13 @@ export default function DODMap() {
 
             {/* Map Controls */}
             <div className="absolute top-3 left-3 z-[1000] bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden shadow-lg">
-              <button onClick={() => {}} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Zoom In">
+              <button onClick={() => { }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Zoom In">
                 <FiPlus size={14} />
               </button>
-              <button onClick={() => {}} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Zoom Out">
+              <button onClick={() => { }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Zoom Out">
                 <FiMinus size={14} />
               </button>
-              <button onClick={() => {}} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Fullscreen">
+              <button onClick={() => { }} className="w-9 h-9 flex items-center justify-center text-slate-400 hover:text-foreground border-b border-white/5 transition-colors" title="Fullscreen">
                 <FiMaximize2 size={14} />
               </button>
               <button onClick={() => setMapView(prev => {
@@ -3801,77 +3797,77 @@ export default function DODMap() {
           style={{ height: 'calc(100vh - 48px)' }}
         >
           <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 p-2">
-          <TeamOverviewPanel
-            users={users}
-            dbTeams={dbTeams}
-            isLoading={isLoading}
-            expanded={panels.teamOverview}
-            onToggle={() => togglePanel("teamOverview")}
-            onSelectTeam={handleSelectTeam}
-          />
-          <SelectedUserPanel
-            user={selectedUser}
-            expanded={panels.selectedUser}
-            onToggle={() => togglePanel("selectedUser")}
-            onFlag={handleFlag}
-            onMessage={(uid) => setMsgModal(uid)}
-            onCreateRoute={handleCreateRouteForUser}
-          />
-          <AlertsPanel
-            users={users}
-            expanded={panels.alerts}
-            onToggle={() => togglePanel("alerts")}
-            onAlertClick={(u) => {
-              focusUserOnMap(u);
-              if (u.flag === "help") {
-                openSOSIncident(u, `${u.name} requested SOS support`, u.flagTime || new Date());
-              }
-            }}
-          />
-          <RoutesPanel
-            routes={routes}
-            routeHistory={routeHistory}
-            users={users}
-            browserPosition={browserPosition}
-            expanded={panels.routes}
-            onToggle={() => togglePanel("routes")}
-            onCompleteRoute={handleCompleteRoute}
-          />
-          <QuickActionsPanel
-            expanded={panels.quickActions}
-            onToggle={() => togglePanel("quickActions")}
-            onExport={handleExport}
-            onRefresh={loadData}
-            onMessageAll={() => setMsgModal("ALL")}
-            onTeamFilter={handleTeamFilter}
-            teamFilter={teamFilter}
-            onRouteMode={handleRouteMode}
-            routeDrawMode={routeDrawMode}
-            poiType={selectedPOIType}
-            onPOITypeChange={setSelectedPOIType}
-            onZoneMode={handleZoneMode}
-            zoneMode={zoneMode}
-          />
-          <CommsPanel
-            messages={messages}
-            users={users}
-            expanded={panels.comms}
-            onToggle={() => togglePanel("comms")}
-            onSend={handleSendMessage}
-          />
-          <ForceManagementPanel
-            expanded={forceExpanded}
-            onToggle={() => setForceExpanded(p => !p)}
-            allUsers={dbAllUsers}
-            dbTeams={dbTeams}
-            isLoading={isLoading}
-            onCreateUser={handlePrimaryForceAction}
-            onCreateTeam={() => setShowCreateTeam(true)}
-            onAssignTeam={(uid) => setAssigningUserId(uid)}
-            onRemoveFromTeam={handleRemoveFromTeam}
-            onLocate={handleLocateUser}
-            currentRole={currentUserRole}
-          />
+            <TeamOverviewPanel
+              users={users}
+              dbTeams={dbTeams}
+              isLoading={isLoading}
+              expanded={panels.teamOverview}
+              onToggle={() => togglePanel("teamOverview")}
+              onSelectTeam={handleSelectTeam}
+            />
+            <SelectedUserPanel
+              user={selectedUser}
+              expanded={panels.selectedUser}
+              onToggle={() => togglePanel("selectedUser")}
+              onFlag={handleFlag}
+              onMessage={(uid) => setMsgModal(uid)}
+              onCreateRoute={handleCreateRouteForUser}
+            />
+            <AlertsPanel
+              users={users}
+              expanded={panels.alerts}
+              onToggle={() => togglePanel("alerts")}
+              onAlertClick={(u) => {
+                focusUserOnMap(u);
+                if (u.flag === "help") {
+                  openSOSIncident(u, `${u.name} requested SOS support`, u.flagTime || new Date());
+                }
+              }}
+            />
+            <RoutesPanel
+              routes={routes}
+              routeHistory={routeHistory}
+              users={users}
+              browserPosition={browserPosition}
+              expanded={panels.routes}
+              onToggle={() => togglePanel("routes")}
+              onCompleteRoute={handleCompleteRoute}
+            />
+            <QuickActionsPanel
+              expanded={panels.quickActions}
+              onToggle={() => togglePanel("quickActions")}
+              onExport={handleExport}
+              onRefresh={loadData}
+              onMessageAll={() => setMsgModal("ALL")}
+              onTeamFilter={handleTeamFilter}
+              teamFilter={teamFilter}
+              onRouteMode={handleRouteMode}
+              routeDrawMode={routeDrawMode}
+              poiType={selectedPOIType}
+              onPOITypeChange={setSelectedPOIType}
+              onZoneMode={handleZoneMode}
+              zoneMode={zoneMode}
+            />
+            <CommsPanel
+              messages={messages}
+              users={users}
+              expanded={panels.comms}
+              onToggle={() => togglePanel("comms")}
+              onSend={handleSendMessage}
+            />
+            <ForceManagementPanel
+              expanded={forceExpanded}
+              onToggle={() => setForceExpanded(p => !p)}
+              allUsers={dbAllUsers}
+              dbTeams={dbTeams}
+              isLoading={isLoading}
+              onCreateUser={handlePrimaryForceAction}
+              onCreateTeam={() => setShowCreateTeam(true)}
+              onAssignTeam={(uid) => setAssigningUserId(uid)}
+              onRemoveFromTeam={handleRemoveFromTeam}
+              onLocate={handleLocateUser}
+              // currentRole={currentUserRole}
+            />
           </div>
         </div>
 
