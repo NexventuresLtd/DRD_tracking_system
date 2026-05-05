@@ -1,3 +1,16 @@
-*__pycache__
-*pyc
-*env
+# Python
+__pycache__/
+*.pyc
+
+# Env
+.env
+
+# Flutter
+build/
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+
+# OS
+.DS_Store
