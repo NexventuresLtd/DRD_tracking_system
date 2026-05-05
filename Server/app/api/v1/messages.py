@@ -12,6 +12,8 @@ from app.models.user import User
 from app.models.message import Message
 from app.models.team import Team, TeamMember
 from app.middleware.auth import get_current_user, require_any_user
+from app.websocket.manager import manager
+import asyncio
 
 class MessageSend(BaseModel):
     to_user_id: Optional[UUID] = None
@@ -177,7 +179,35 @@ async def send_message(
     db.add(message)
     await db.commit()
     await db.refresh(message)
-    
+
+    # Broadcast message via WebSocket so connected clients update in real time
+    try:
+        broadcast_payload = {
+            "type": "new_message",
+            "data": {
+                "id": str(message.id),
+                "from_user_id": str(message.from_user_id),
+                "from_user_name": current_user.full_name,
+                "to_user_id": str(message.to_user_id) if message.to_user_id else None,
+                "to_team_id": str(message.to_team_id) if message.to_team_id else None,
+                "to_all": message.to_all,
+                "content": message.content,
+                "priority": message.priority,
+                "created_at": message.created_at.isoformat(),
+            },
+        }
+        if message.to_all:
+            asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
+        elif message.to_team_id:
+            asyncio.create_task(manager.broadcast_to_team(str(message.to_team_id), broadcast_payload))
+        elif message.to_user_id:
+            asyncio.create_task(manager.send_personal_message(broadcast_payload, str(message.to_user_id)))
+            asyncio.create_task(manager.send_personal_message(broadcast_payload, str(message.from_user_id)))
+        else:
+            asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
+    except Exception:
+        pass
+
     return MessageResponse(
         id=message.id,
         from_user_id=message.from_user_id,

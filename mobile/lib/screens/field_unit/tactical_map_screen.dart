@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
@@ -223,6 +224,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Map<String, dynamic>? _activeNavRoute;
   LatLng? _navDestination;
   Map<String, dynamic>? _activeFollowSession;
+  List<LatLng> _activeRouteRoad = []; // OSRM road polyline for active route
 
   // ── Controllers ─────────────────────────────────────────────────────────────
   Timer? _refreshTimer;
@@ -255,13 +257,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _connectWebSockets();
     });
 
-    _refreshTimer = Timer.periodic(
-      const Duration(seconds: 5),
-      (_) {
-        _loadMapData();
-        _loadMessages();
-      },
-    );
+    _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _loadMapData();
+      _loadMessages();
+    });
   }
 
   Future<void> _initTracking() async {
@@ -278,9 +277,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
     try {
       final results = await Future.wait([
-        _api.get(
-          teamId != null ? '/locations?team_id=$teamId' : '/locations',
-        ),
+        _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations'),
         _api.get(
           teamId != null
               ? '/routes?is_active=true&team_id=$teamId'
@@ -293,10 +290,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       setState(() {
         _teamLocations =
             (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _myRoutes =
-            (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _sharedPois =
-            (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        _myRoutes = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
+        _sharedPois = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
         _activeFollowSession = results[3] as Map<String, dynamic>?;
       });
     } catch (_) {}
@@ -320,47 +315,47 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     if (token == null) return;
 
     // Location WebSocket – receive real-time team positions
-        _locChannel = WebSocketChannel.connect(
-          Uri.parse('${AppConstants.wsUrl}/locations?token=$token'),
-        );
-        _locChannel!.stream.listen((raw) {
-          final data = jsonDecode(raw as String) as Map<String, dynamic>;
-          final d = (data['data'] ?? data) as Map<String, dynamic>;
-          final uid = d['user_id'] as String?;
-          if (uid == null) return;
-          setState(() {
-            final idx = _teamLocations.indexWhere((l) => l['user_id'] == uid);
-            if (idx >= 0) {
-              _teamLocations[idx] = {..._teamLocations[idx], ...d};
-            } else {
-              _teamLocations.add(Map<String, dynamic>.from(d));
-            }
-          });
-        });
+    _locChannel = WebSocketChannel.connect(
+      Uri.parse('${AppConstants.wsUrl}/locations?token=$token'),
+    );
+    _locChannel!.stream.listen((raw) {
+      final data = jsonDecode(raw as String) as Map<String, dynamic>;
+      final d = (data['data'] ?? data) as Map<String, dynamic>;
+      final uid = d['user_id'] as String?;
+      if (uid == null) return;
+      setState(() {
+        final idx = _teamLocations.indexWhere((l) => l['user_id'] == uid);
+        if (idx >= 0) {
+          _teamLocations[idx] = {..._teamLocations[idx], ...d};
+        } else {
+          _teamLocations.add(Map<String, dynamic>.from(d));
+        }
+      });
+    });
 
     // Message WebSocket
-        _msgChannel = WebSocketChannel.connect(
-          Uri.parse('${AppConstants.wsUrl}/messages?token=$token'),
-        );
-        _msgChannel!.stream.listen((raw) {
-          final data = jsonDecode(raw as String) as Map<String, dynamic>;
-          final d = (data['data'] ?? data) as Map<String, dynamic>;
-          if (d['content'] == null) return;
-          setState(() {
-            if (!_messages.any((m) => m['id'] == d['id'])) {
-              _messages.add(d);
-            }
-          });
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (_msgScroll.hasClients) {
-              _msgScroll.animateTo(
-                _msgScroll.position.maxScrollExtent,
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-              );
-            }
-          });
-        });
+    _msgChannel = WebSocketChannel.connect(
+      Uri.parse('${AppConstants.wsUrl}/messages?token=$token'),
+    );
+    _msgChannel!.stream.listen((raw) {
+      final data = jsonDecode(raw as String) as Map<String, dynamic>;
+      final d = (data['data'] ?? data) as Map<String, dynamic>;
+      if (d['content'] == null) return;
+      setState(() {
+        if (!_messages.any((m) => m['id'] == d['id'])) {
+          _messages.add(d);
+        }
+      });
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_msgScroll.hasClients) {
+          _msgScroll.animateTo(
+            _msgScroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 200),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    });
 
     // Event WebSocket - keep routes and POIs synced in real time
     try {
@@ -372,7 +367,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           final data = jsonDecode(raw as String) as Map<String, dynamic>;
           final d = (data['data'] ?? data) as Map<String, dynamic>;
           final eventType = (d['event_type'] ?? '').toString().toUpperCase();
-          if (eventType == 'ROUTE' || eventType == 'ZONE' || eventType == 'POI' || eventType.startsWith('ROUTE_FOLLOW')) {
+          if (eventType == 'ROUTE' ||
+              eventType == 'ZONE' ||
+              eventType == 'POI' ||
+              eventType.startsWith('ROUTE_FOLLOW')) {
             _loadMapData();
           }
         } catch (_) {}
@@ -382,10 +380,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   // ── Backend actions ──────────────────────────────────────────────────────────
 
-  Future<void> _placeMark(
-    Map<String, dynamic> markType,
-    LatLng pos,
-  ) async {
+  Future<void> _placeMark(Map<String, dynamic> markType, LatLng pos) async {
     final auth = context.read<AuthProvider>();
     final label = '${markType['label']} ${_marks.length + 1}';
 
@@ -430,7 +425,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       });
     } catch (_) {}
 
-    _showSnack('${markType['label']} marked & reported to command', color: Color(markType['color'] as int));
+    _showSnack(
+      '${markType['label']} marked & reported to command',
+      color: Color(markType['color'] as int),
+    );
   }
 
   Future<void> _triggerSOS(Map<String, dynamic> sosType) async {
@@ -447,19 +445,20 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       await _api.post('/events', {
         'event_type': 'FLAG',
         'user_id': auth.user?.id,
-        if (teamId != null) 'team_id': teamId,
-        'description': 'SOS: ${sosType['label']} — $unitName needs immediate assistance',
-        if (lat != null) 'location_lat': lat,
-        if (lng != null) 'location_lng': lng,
+        'team_id': ?teamId,
+        'description':
+            'SOS: ${sosType['label']} — $unitName needs immediate assistance',
+        'location_lat': ?lat,
+        'location_lng': ?lng,
         'severity': 'high',
-        'event_metadata': {
-          'sos_type': sosType['id'],
-          'unit_name': unitName,
-        },
+        'event_metadata': {'sos_type': sosType['id'], 'unit_name': unitName},
       });
     } catch (_) {}
 
-    _showSnack('SOS SENT — Command has been alerted!', color: DRDTheme.dangerColor);
+    _showSnack(
+      'SOS SENT — Command has been alerted!',
+      color: DRDTheme.dangerColor,
+    );
   }
 
   Future<void> _sendMessage(String content) async {
@@ -506,7 +505,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Row(
               children: [
-                const Icon(Icons.push_pin, color: DRDTheme.warningColor, size: 16),
+                const Icon(
+                  Icons.push_pin,
+                  color: DRDTheme.warningColor,
+                  size: 16,
+                ),
                 const SizedBox(width: 8),
                 Text(
                   'MARK TYPE  —  ${pos.latitude.toStringAsFixed(4)}, ${pos.longitude.toStringAsFixed(4)}',
@@ -522,62 +525,67 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           ),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
-            child: LayoutBuilder(builder: (_, constraints) {
-              final width = constraints.maxWidth;
-              final columns = width < 320 ? 3 : (width < 420 ? 4 : 5);
-              return GridView.builder(
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: columns,
-                  childAspectRatio: 0.9,
-                  crossAxisSpacing: 6,
-                  mainAxisSpacing: 6,
-                ),
-                itemCount: _markTypes.length,
-                itemBuilder: (_, i) {
-                final mt = _markTypes[i];
-                final color = Color(mt['color'] as int);
-                return GestureDetector(
-                  onTap: () {
-                    Navigator.pop(context);
-                    _placeMark(mt, pos);
-                  },
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: 0.12),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          mt['symbol'] as String,
-                          style: TextStyle(
-                            color: color,
-                            fontSize: 18,
-                            fontWeight: FontWeight.bold,
-                          ),
-                        ),
-                        const SizedBox(height: 3),
-                        Text(
-                          mt['label'] as String,
-                          textAlign: TextAlign.center,
-                          style: TextStyle(
-                            color: color.withValues(alpha: 0.85),
-                            fontSize: 7.5,
-                            fontWeight: FontWeight.w600,
-                            height: 1.1,
-                          ),
-                        ),
-                      ],
-                    ),
+            child: LayoutBuilder(
+              builder: (_, constraints) {
+                final width = constraints.maxWidth;
+                final columns = width < 320 ? 3 : (width < 420 ? 4 : 5);
+                return GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: columns,
+                    childAspectRatio: 0.9,
+                    crossAxisSpacing: 6,
+                    mainAxisSpacing: 6,
                   ),
+                  itemCount: _markTypes.length,
+                  itemBuilder: (_, i) {
+                    final mt = _markTypes[i];
+                    final color = Color(mt['color'] as int);
+                    return GestureDetector(
+                      onTap: () {
+                        Navigator.pop(context);
+                        _placeMark(mt, pos);
+                      },
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: color.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: color.withValues(alpha: 0.4),
+                            width: 1,
+                          ),
+                        ),
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Text(
+                              mt['symbol'] as String,
+                              style: TextStyle(
+                                color: color,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              mt['label'] as String,
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: color.withValues(alpha: 0.85),
+                                fontSize: 7.5,
+                                fontWeight: FontWeight.w600,
+                                height: 1.1,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
                 );
-                },
-              );
-            }),
+              },
+            ),
           ),
         ],
       ),
@@ -633,7 +641,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   shape: BoxShape.circle,
                   border: Border.all(color: color.withValues(alpha: 0.5)),
                 ),
-                child: Icon(Icons.warning_amber_rounded, color: color, size: 22),
+                child: Icon(
+                  Icons.warning_amber_rounded,
+                  color: color,
+                  size: 22,
+                ),
               ),
               title: Text(
                 sos['label'] as String,
@@ -661,7 +673,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   void _showRoutesSheet() {
     if (_myRoutes.isEmpty) {
-      _showSnack('No routes assigned to your team', color: DRDTheme.warningColor);
+      _showSnack(
+        'No routes assigned to your team',
+        color: DRDTheme.warningColor,
+      );
       return;
     }
     showModalBottomSheet(
@@ -711,8 +726,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               final color = _colorFromHex(r['color']);
               final wps = r['waypoints'] as List?;
               final wpsCount = wps?.length ?? 0;
-              final routeStatus = (r['route_status'] as String? ?? (r['is_active'] == false ? 'completed' : 'assigned')).toUpperCase();
-              final isActive = _activeNavRoute != null && _activeNavRoute!['id'] == r['id'];
+              final routeStatus =
+                  (r['route_status'] as String? ??
+                          (r['is_active'] == false ? 'completed' : 'assigned'))
+                      .toUpperCase();
+              final isActive =
+                  _activeNavRoute != null && _activeNavRoute!['id'] == r['id'];
               return GestureDetector(
                 onTap: () {
                   Navigator.pop(context);
@@ -762,7 +781,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                               '$wpsCount waypoints · $routeStatus${isActive ? '  ·  NAVIGATING' : ''}',
                               style: TextStyle(
                                 color: isActive
-                                    ? const Color(0xFF00E5FF).withValues(alpha: 0.8)
+                                    ? const Color(
+                                        0xFF00E5FF,
+                                      ).withValues(alpha: 0.8)
                                     : Colors.white38,
                                 fontSize: 10,
                               ),
@@ -773,7 +794,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                       const SizedBox(width: 8),
                       Icon(
                         isActive ? Icons.navigation : Icons.chevron_right,
-                        color: isActive ? const Color(0xFF00E5FF) : Colors.white24,
+                        color: isActive
+                            ? const Color(0xFF00E5FF)
+                            : Colors.white24,
                         size: 18,
                       ),
                     ],
@@ -839,11 +862,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 ),
 
                 // ── GPS / Status HUD ───────────────────────────────────────
-                Positioned(
-                  top: topPad + 52,
-                  left: 10,
-                  child: _buildHud(loc),
-                ),
+                Positioned(top: topPad + 52, left: 10, child: _buildHud(loc)),
 
                 // ── Team count badge ───────────────────────────────────────
                 Positioned(
@@ -932,16 +951,23 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           ),
         // Route polylines
         PolylineLayer(polylines: _buildRouteLines()),
-        // Navigation line from soldier to active route destination
+        // Active route: OSRM road polyline when available, otherwise straight line
         if (_navDestination != null)
           PolylineLayer(
             polylines: [
-              Polyline(
-                points: [myPos, _navDestination!],
-                color: const Color(0xFF00E5FF),
-                strokeWidth: 2.5,
-                isDotted: true,
-              ),
+              if (_activeRouteRoad.length >= 2)
+                Polyline(
+                  points: _activeRouteRoad,
+                  color: const Color(0xFF00E5FF),
+                  strokeWidth: 3.5,
+                )
+              else
+                Polyline(
+                  points: [myPos, _navDestination!],
+                  color: const Color(0xFF00E5FF),
+                  strokeWidth: 2.5,
+                  isDotted: true,
+                ),
             ],
           ),
         // Nav destination marker
@@ -986,8 +1012,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: (_sosActive ? DRDTheme.dangerColor : DRDTheme.primaryColor)
-                      .withValues(alpha: 0.45 * (1 - t)),
+                  color:
+                      (_sosActive
+                              ? DRDTheme.dangerColor
+                              : DRDTheme.primaryColor)
+                          .withValues(alpha: 0.45 * (1 - t)),
                   width: 2,
                 ),
               ),
@@ -1000,7 +1029,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: DRDTheme.dangerColor.withValues(alpha: 0.6 * sosFlash),
+                    color: DRDTheme.dangerColor.withValues(
+                      alpha: 0.6 * sosFlash,
+                    ),
                     width: 3,
                   ),
                 ),
@@ -1011,10 +1042,13 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               height: 32,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
-                color: (_sosActive ? DRDTheme.dangerColor : DRDTheme.primaryColor)
-                    .withValues(alpha: 0.2),
+                color:
+                    (_sosActive ? DRDTheme.dangerColor : DRDTheme.primaryColor)
+                        .withValues(alpha: 0.2),
                 border: Border.all(
-                  color: _sosActive ? DRDTheme.dangerColor : DRDTheme.primaryColor,
+                  color: _sosActive
+                      ? DRDTheme.dangerColor
+                      : DRDTheme.primaryColor,
                   width: 2.5,
                 ),
               ),
@@ -1024,7 +1058,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               angle: loc.heading * pi / 180,
               child: Icon(
                 Icons.navigation,
-                color: _sosActive ? DRDTheme.dangerColor : DRDTheme.primaryColor,
+                color: _sosActive
+                    ? DRDTheme.dangerColor
+                    : DRDTheme.primaryColor,
                 size: 22,
               ),
             ),
@@ -1033,7 +1069,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               Positioned(
                 bottom: 0,
                 child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 1,
+                  ),
                   decoration: BoxDecoration(
                     color: DRDTheme.dangerColor,
                     borderRadius: BorderRadius.circular(3),
@@ -1071,7 +1110,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               borderRadius: BorderRadius.circular(4),
             ),
             child: Text(
-              routeName.length > 10 ? '${routeName.substring(0, 9)}…' : routeName,
+              routeName.length > 10
+                  ? '${routeName.substring(0, 9)}…'
+                  : routeName,
               style: const TextStyle(
                 color: Colors.black,
                 fontSize: 8,
@@ -1104,8 +1145,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           if (lat == null || lng == null) return null;
 
           final status = l['status'] as String? ?? 'offline';
-          final statusColor =
-              DRDTheme.statusColors[status] ?? Colors.grey;
+          final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
           final name = l['user_name'] as String? ?? '?';
           final initials = name
               .split(' ')
@@ -1122,7 +1162,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: DRDTheme.surfaceColor.withValues(alpha: 0.92),
                     borderRadius: BorderRadius.circular(4),
@@ -1230,10 +1273,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       polylines.add(
         Polyline(
           points: wps
-              .map((wp) => LatLng(
-                    (wp['latitude'] as num).toDouble(),
-                    (wp['longitude'] as num).toDouble(),
-                  ))
+              .map(
+                (wp) => LatLng(
+                  (wp['latitude'] as num).toDouble(),
+                  (wp['longitude'] as num).toDouble(),
+                ),
+              )
               .toList(),
           color: color,
           strokeWidth: 3.5,
@@ -1320,7 +1365,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   double? _routeDistanceToTarget(Map<String, dynamic> route, LatLng origin) {
     final target = _routeTarget(route);
     if (target == null) return null;
-    return _distanceKm(origin.latitude, origin.longitude, target.latitude, target.longitude);
+    return _distanceKm(
+      origin.latitude,
+      origin.longitude,
+      target.latitude,
+      target.longitude,
+    );
   }
 
   Map<String, dynamic>? _nearestRouteToPoint(LatLng point) {
@@ -1337,8 +1387,59 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return best;
   }
 
+  /// Fetches a real road-following polyline from the OSRM public API.
+  /// Falls back to straight-line waypoints if the request fails.
+  Future<List<LatLng>> _fetchOsrmRoute(List<Map<String, dynamic>> waypoints) async {
+    if (waypoints.length < 2) {
+      return waypoints.map((wp) => LatLng(
+        (wp['latitude'] as num).toDouble(),
+        (wp['longitude'] as num).toDouble(),
+      )).toList();
+    }
+
+    // OSRM expects coordinates as "lng,lat;lng,lat;..."
+    final coords = waypoints.map((wp) {
+      final lat = (wp['latitude'] as num).toDouble();
+      final lng = (wp['longitude'] as num).toDouble();
+      return '$lng,$lat';
+    }).join(';');
+
+    try {
+      final uri = Uri.parse(
+        'https://router.project-osrm.org/route/v1/driving/$coords'
+        '?overview=full&geometries=geojson',
+      );
+      final response = await http.get(uri).timeout(const Duration(seconds: 8));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body) as Map<String, dynamic>;
+        final routes = data['routes'] as List?;
+        if (routes != null && routes.isNotEmpty) {
+          final geometry = routes.first['geometry'] as Map<String, dynamic>?;
+          final coordinates = geometry?['coordinates'] as List?;
+          if (coordinates != null) {
+            // GeoJSON coordinates are [lng, lat]
+            return coordinates.map((c) {
+              final lng = (c[0] as num).toDouble();
+              final lat = (c[1] as num).toDouble();
+              return LatLng(lat, lng);
+            }).toList();
+          }
+        }
+      }
+    } catch (_) {
+      // Network error or timeout — fall through to straight-line fallback
+    }
+
+    // Fallback: straight lines between waypoints
+    return waypoints.map((wp) => LatLng(
+      (wp['latitude'] as num).toDouble(),
+      (wp['longitude'] as num).toDouble(),
+    )).toList();
+  }
+
   Future<void> _startFollowRoute(Map<String, dynamic> route) async {
-    final waypoints = (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final waypoints =
+        (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     if (waypoints.isEmpty) {
       _showSnack('Route has no waypoints', color: DRDTheme.warningColor);
       return;
@@ -1355,12 +1456,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       return;
     }
 
+    // Fetch real road route from OSRM (runs in parallel, non-blocking)
+    final roadPoints = await _fetchOsrmRoute(waypoints);
+
     final target = _routeTarget(route);
     if (!mounted) return;
     setState(() {
       _activeNavRoute = route;
       _navDestination = target;
       _activeFollowSession = session as Map<String, dynamic>?;
+      _activeRouteRoad = roadPoints;
       _panelOpen = false;
     });
     if (target != null && _mapReady) {
@@ -1372,24 +1477,36 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Future<void> _stopFollowSession() async {
     final session = _activeFollowSession;
     if (session == null) return;
-    final result = await _api.stopRouteFollow(session['id'] as String, {'completion_note': 'Stopped from mobile'});
+    final result = await _api.stopRouteFollow(session['id'] as String, {
+      'completion_note': 'Stopped from mobile',
+    });
     if (result != null && mounted) {
       setState(() {
         _activeFollowSession = null;
         _activeNavRoute = null;
         _navDestination = null;
+        _activeRouteRoad = [];
       });
       _showSnack('Route follow stopped', color: DRDTheme.warningColor);
     }
   }
 
-  void _showRouteDetailsSheet(Map<String, dynamic> route, {LatLng? anchorPoint}) {
-    final waypoints = (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+  void _showRouteDetailsSheet(
+    Map<String, dynamic> route, {
+    LatLng? anchorPoint,
+  }) {
+    final waypoints =
+        (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final target = _routeTarget(route);
     final routeName = route['name'] as String? ?? 'Route';
-    final routeStatus = (route['route_status'] as String? ?? (route['is_active'] == false ? 'completed' : 'assigned')).toUpperCase();
+    final routeStatus =
+        (route['route_status'] as String? ??
+                (route['is_active'] == false ? 'completed' : 'assigned'))
+            .toUpperCase();
     final activeRouteId = _activeFollowSession?['route_id'] as String?;
-    final sessionActive = activeRouteId == route['id'] && _activeFollowSession?['status'] == 'active';
+    final sessionActive =
+        activeRouteId == route['id'] &&
+        _activeFollowSession?['status'] == 'active';
 
     showModalBottomSheet(
       context: context,
@@ -1399,7 +1516,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
       builder: (_) => Padding(
-        padding: EdgeInsets.only(bottom: MediaQuery.of(context).viewInsets.bottom),
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(context).viewInsets.bottom,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1409,30 +1528,69 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               child: Container(
                 width: 36,
                 height: 4,
-                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 6),
               child: Row(
                 children: [
-                  Container(width: 10, height: 10, decoration: BoxDecoration(color: _colorFromHex(route['color']).withValues(alpha: 0.95), shape: BoxShape.circle)),
-                  const SizedBox(width: 8),
-                  Expanded(child: Text(routeName, style: const TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold))),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    width: 10,
+                    height: 10,
                     decoration: BoxDecoration(
-                      color: sessionActive ? DRDTheme.successColor.withValues(alpha: 0.18) : DRDTheme.primaryColor.withValues(alpha: 0.12),
+                      color: _colorFromHex(
+                        route['color'],
+                      ).withValues(alpha: 0.95),
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      routeName,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: sessionActive
+                          ? DRDTheme.successColor.withValues(alpha: 0.18)
+                          : DRDTheme.primaryColor.withValues(alpha: 0.12),
                       borderRadius: BorderRadius.circular(999),
                     ),
-                    child: Text(sessionActive ? 'FOLLOWING' : routeStatus, style: TextStyle(color: sessionActive ? DRDTheme.successColor : DRDTheme.primaryColor, fontSize: 10, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      sessionActive ? 'FOLLOWING' : routeStatus,
+                      style: TextStyle(
+                        color: sessionActive
+                            ? DRDTheme.successColor
+                            : DRDTheme.primaryColor,
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Text(route['description'] as String? ?? 'Route details are synced from the backend.', style: const TextStyle(color: Colors.white60, fontSize: 11)),
+              child: Text(
+                route['description'] as String? ??
+                    'Route details are synced from the backend.',
+                style: const TextStyle(color: Colors.white60, fontSize: 11),
+              ),
             ),
             const SizedBox(height: 10),
             Padding(
@@ -1442,8 +1600,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 runSpacing: 8,
                 children: [
                   _tag('${waypoints.length} waypoints', Colors.white70),
-                  if (target != null) _tag('TARGET ${target.latitude.toStringAsFixed(4)}, ${target.longitude.toStringAsFixed(4)}', Colors.white54),
-                  if (_activeFollowSession != null) _tag('ETA ${_activeFollowSession!['eta_seconds'] ?? '--'}s', Colors.white54),
+                  if (target != null)
+                    _tag(
+                      'TARGET ${target.latitude.toStringAsFixed(4)}, ${target.longitude.toStringAsFixed(4)}',
+                      Colors.white54,
+                    ),
+                  if (_activeFollowSession != null)
+                    _tag(
+                      'ETA ${_activeFollowSession!['eta_seconds'] ?? '--'}s',
+                      Colors.white54,
+                    ),
                 ],
               ),
             ),
@@ -1454,10 +1620,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 children: [
                   Expanded(
                     child: ElevatedButton.icon(
-                      onPressed: sessionActive ? null : () async {
-                        Navigator.pop(context);
-                        await _startFollowRoute(route);
-                      },
+                      onPressed: sessionActive
+                          ? null
+                          : () async {
+                              Navigator.pop(context);
+                              await _startFollowRoute(route);
+                            },
                       icon: const Icon(Icons.play_arrow, size: 18),
                       label: const Text('FOLLOW ROUTE'),
                     ),
@@ -1465,13 +1633,20 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   const SizedBox(width: 8),
                   Expanded(
                     child: OutlinedButton.icon(
-                      onPressed: sessionActive ? _stopFollowSession : () {
-                        if (target != null && _mapReady) {
-                          _mapController.move(target, 14);
-                        }
-                        Navigator.pop(context);
-                      },
-                      icon: Icon(sessionActive ? Icons.stop_circle_outlined : Icons.center_focus_strong, size: 18),
+                      onPressed: sessionActive
+                          ? _stopFollowSession
+                          : () {
+                              if (target != null && _mapReady) {
+                                _mapController.move(target, 14);
+                              }
+                              Navigator.pop(context);
+                            },
+                      icon: Icon(
+                        sessionActive
+                            ? Icons.stop_circle_outlined
+                            : Icons.center_focus_strong,
+                        size: 18,
+                      ),
                       label: Text(sessionActive ? 'STOP' : 'CENTER'),
                     ),
                   ),
@@ -1486,7 +1661,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   LatLng? _routeTarget(Map<String, dynamic> route) {
-    final wps = (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final wps =
+        (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     if (wps.isEmpty) return null;
     final last = wps.last;
     final lat = (last['latitude'] as num?)?.toDouble();
@@ -1510,8 +1686,19 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Widget _tag(String text, Color color) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(3)),
-      child: Text(text, style: TextStyle(color: color, fontSize: 8.5, fontWeight: FontWeight.bold, letterSpacing: 0.6)),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(3),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color,
+          fontSize: 8.5,
+          fontWeight: FontWeight.bold,
+          letterSpacing: 0.6,
+        ),
+      ),
     );
   }
 
@@ -1526,7 +1713,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       final lat2 = _navDestination!.latitude * pi / 180;
       final dLat = lat2 - lat1;
       final dLng = (_navDestination!.longitude - myPos.longitude) * pi / 180;
-      final a = sin(dLat / 2) * sin(dLat / 2) +
+      final a =
+          sin(dLat / 2) * sin(dLat / 2) +
           cos(lat1) * cos(lat2) * sin(dLng / 2) * sin(dLng / 2);
       distKm = earthR * 2 * atan2(sqrt(a), sqrt(1 - a));
     }
@@ -1540,8 +1728,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       decoration: BoxDecoration(
         color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: const Color(0xFF00E5FF).withValues(alpha: 0.6)),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6)],
+        border: Border.all(
+          color: const Color(0xFF00E5FF).withValues(alpha: 0.6),
+        ),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 6),
+        ],
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1570,6 +1762,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             onTap: () => setState(() {
               _activeNavRoute = null;
               _navDestination = null;
+              _activeRouteRoad = [];
             }),
             child: const Icon(Icons.close, color: Colors.white54, size: 14),
           ),
@@ -1689,8 +1882,14 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           ),
           const SizedBox(height: 5),
           _hRow(Icons.speed_outlined, '${loc.speed.toStringAsFixed(1)} km/h'),
-          _hRow(Icons.explore_outlined, 'HDG ${loc.heading.toStringAsFixed(0)}°'),
-          _hRow(Icons.landscape_outlined, 'ALT ${loc.altitude.toStringAsFixed(0)} m'),
+          _hRow(
+            Icons.explore_outlined,
+            'HDG ${loc.heading.toStringAsFixed(0)}°',
+          ),
+          _hRow(
+            Icons.landscape_outlined,
+            'ALT ${loc.altitude.toStringAsFixed(0)} m',
+          ),
           _hRow(
             Icons.battery_std_outlined,
             '${loc.batteryLevel}%',
@@ -1730,7 +1929,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Widget _buildTeamBadge() {
     final active = _teamLocations.where((l) => l['status'] == 'active').length;
     final stale = _teamLocations.where((l) => l['status'] == 'stale').length;
-    final offline = _teamLocations.where((l) => l['status'] == 'offline').length;
+    final offline = _teamLocations
+        .where((l) => l['status'] == 'offline')
+        .length;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
@@ -2034,7 +2235,6 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         ],
       ),
       child: Column(
-        mainAxisSize: MainAxisSize.min,
         children: [
           // Handle + toggle
           GestureDetector(
@@ -2046,12 +2246,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               child: Row(
                 children: [
                   Icon(
-                    _panelOpen ? Icons.keyboard_arrow_down : Icons.keyboard_arrow_up,
+                    _panelOpen
+                        ? Icons.keyboard_arrow_down
+                        : Icons.keyboard_arrow_up,
                     color: Colors.white38,
                     size: 18,
                   ),
                   const SizedBox(width: 10),
-                  const Icon(Icons.chat_bubble_outline, size: 13, color: DRDTheme.successColor),
+                  const Icon(
+                    Icons.chat_bubble_outline,
+                    size: 13,
+                    color: DRDTheme.successColor,
+                  ),
                   const SizedBox(width: 5),
                   Text(
                     'COMMS',
@@ -2065,7 +2271,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   if (unread > 0) ...[
                     const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 5,
+                        vertical: 1,
+                      ),
                       decoration: BoxDecoration(
                         color: DRDTheme.dangerColor,
                         borderRadius: BorderRadius.circular(8),
@@ -2090,12 +2299,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             ),
           ),
 
-          // Comms content
+          // Comms content — Expanded fills remainder so there's no overflow
           if (_panelOpen)
-            SizedBox(
-              height: panelHeight - 48,
-              child: _buildCommsTab(auth),
-            ),
+            Expanded(child: _buildCommsTab(auth)),
         ],
       ),
     );
@@ -2125,14 +2331,17 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     final msg = _messages[i];
                     final fromMe = msg['from_user_id'] == myId;
                     final content = msg['content'] as String? ?? '';
-                    final sender = msg['from_user_name'] as String? ?? 'Unknown';
+                    final sender =
+                        msg['from_user_name'] as String? ?? 'Unknown';
                     final priority = msg['priority'] as String? ?? 'normal';
-                    final priorityColor = {
-                      'urgent': DRDTheme.dangerColor,
-                      'high': DRDTheme.warningColor,
-                      'normal': Colors.white54,
-                      'low': Colors.white30,
-                    }[priority] ?? Colors.white54;
+                    final priorityColor =
+                        {
+                          'urgent': DRDTheme.dangerColor,
+                          'high': DRDTheme.warningColor,
+                          'normal': Colors.white54,
+                          'low': Colors.white30,
+                        }[priority] ??
+                        Colors.white54;
 
                     return Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
@@ -2146,12 +2355,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                               padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
                               decoration: BoxDecoration(
                                 color: fromMe
-                                    ? DRDTheme.primaryColor.withValues(alpha: 0.25)
-                                    : DRDTheme.backgroundColor.withValues(alpha: 0.7),
+                                    ? DRDTheme.primaryColor.withValues(
+                                        alpha: 0.25,
+                                      )
+                                    : DRDTheme.backgroundColor.withValues(
+                                        alpha: 0.7,
+                                      ),
                                 borderRadius: BorderRadius.circular(8),
                                 border: Border.all(
                                   color: fromMe
-                                      ? DRDTheme.primaryColor.withValues(alpha: 0.4)
+                                      ? DRDTheme.primaryColor.withValues(
+                                          alpha: 0.4,
+                                        )
                                       : Colors.white.withValues(alpha: 0.08),
                                 ),
                               ),
@@ -2188,8 +2403,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   },
                 ),
         ),
-        // Send bar
-        Container(
+        // Send bar – SafeArea prevents overlap with system nav bar
+        SafeArea(
+          top: false,
+          child: Container(
           padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
           decoration: BoxDecoration(
             border: Border(
@@ -2204,7 +2421,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   style: const TextStyle(color: Colors.white, fontSize: 12),
                   decoration: InputDecoration(
                     hintText: 'Message unit / command…',
-                    hintStyle: const TextStyle(color: Colors.white30, fontSize: 12),
+                    hintStyle: const TextStyle(
+                      color: Colors.white30,
+                      fontSize: 12,
+                    ),
                     filled: true,
                     fillColor: DRDTheme.backgroundColor.withValues(alpha: 0.5),
                     contentPadding: const EdgeInsets.symmetric(
@@ -2240,9 +2460,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   width: 40,
                   height: 40,
                   decoration: BoxDecoration(
-                    color: _sending
-                        ? Colors.white10
-                        : DRDTheme.primaryColor,
+                    color: _sending ? Colors.white10 : DRDTheme.primaryColor,
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: _sending
@@ -2260,6 +2478,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             ],
           ),
         ),
+        ), // SafeArea
       ],
     );
   }

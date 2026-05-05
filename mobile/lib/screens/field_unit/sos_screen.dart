@@ -29,7 +29,8 @@ class _SOSScreenState extends State<SOSScreen> {
         'event_type': 'FLAG',
         'user_id': auth.user?.id,
         'team_id': auth.user?.teamId,
-        'description': 'SOS alert — ${auth.user?.fullName ?? 'Field Unit'} needs assistance',
+        'description':
+            'SOS alert — ${auth.user?.fullName ?? 'Field Unit'} needs assistance',
         'location_lat': loc.latitude,
         'location_lng': loc.longitude,
         'severity': 'high',
@@ -223,7 +224,9 @@ class _SOSScreenState extends State<SOSScreen> {
       child: Container(
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: isSelected ? color.withValues(alpha: 0.2) : DRDTheme.surfaceColor,
+          color: isSelected
+              ? color.withValues(alpha: 0.2)
+              : DRDTheme.surfaceColor,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: isSelected ? color : Colors.transparent,

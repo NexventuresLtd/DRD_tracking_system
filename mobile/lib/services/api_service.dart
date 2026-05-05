@@ -28,9 +28,15 @@ class ApiService {
 
   Future<dynamic> get(String endpoint) async {
     try {
-      final response = await http.get(_uri(endpoint), headers: await _getHeaders());
+      final response = await http.get(
+        _uri(endpoint),
+        headers: await _getHeaders(),
+      );
       if (response.statusCode == 200) return jsonDecode(response.body);
-      if (response.statusCode == 401) { await _refreshToken(); return get(endpoint); }
+      if (response.statusCode == 401) {
+        await _refreshToken();
+        return get(endpoint);
+      }
       throw Exception('Failed to load data: ${response.statusCode}');
     } catch (e) {
       debugPrint('GET Error: $e');
@@ -48,8 +54,13 @@ class ApiService {
       if (response.statusCode == 201 || response.statusCode == 200) {
         return response.body.isNotEmpty ? jsonDecode(response.body) : {};
       }
-      if (response.statusCode == 401) { await _refreshToken(); return post(endpoint, data); }
-      throw Exception('Failed to create: ${response.statusCode} — ${response.body}');
+      if (response.statusCode == 401) {
+        await _refreshToken();
+        return post(endpoint, data);
+      }
+      throw Exception(
+        'Failed to create: ${response.statusCode} — ${response.body}',
+      );
     } catch (e) {
       debugPrint('POST Error: $e');
       return null;
@@ -66,7 +77,10 @@ class ApiService {
       if (response.statusCode == 200) {
         return response.body.isNotEmpty ? jsonDecode(response.body) : {};
       }
-      if (response.statusCode == 401) { await _refreshToken(); return put(endpoint, data); }
+      if (response.statusCode == 401) {
+        await _refreshToken();
+        return put(endpoint, data);
+      }
       throw Exception('Failed to update: ${response.statusCode}');
     } catch (e) {
       debugPrint('PUT Error: $e');
@@ -76,11 +90,17 @@ class ApiService {
 
   Future<dynamic> delete(String endpoint) async {
     try {
-      final response = await http.delete(_uri(endpoint), headers: await _getHeaders());
+      final response = await http.delete(
+        _uri(endpoint),
+        headers: await _getHeaders(),
+      );
       if (response.statusCode == 200 || response.statusCode == 204) {
         return response.body.isNotEmpty ? jsonDecode(response.body) : {};
       }
-      if (response.statusCode == 401) { await _refreshToken(); return delete(endpoint); }
+      if (response.statusCode == 401) {
+        await _refreshToken();
+        return delete(endpoint);
+      }
       throw Exception('Failed to delete: ${response.statusCode}');
     } catch (e) {
       debugPrint('DELETE Error: $e');
@@ -91,19 +111,32 @@ class ApiService {
   Future<dynamic> updateRoute(String routeId, Map<String, dynamic> data) =>
       put('/routes/$routeId', data);
 
-    Future<dynamic> startRouteFollow(Map<String, dynamic> data) =>
+  Future<dynamic> startRouteFollow(Map<String, dynamic> data) =>
       post('/route-follow-sessions/start', data);
 
-    Future<dynamic> stopRouteFollow(String sessionId, [Map<String, dynamic>? data]) =>
-      post('/route-follow-sessions/$sessionId/stop', data ?? <String, dynamic>{});
+  Future<dynamic> stopRouteFollow(
+    String sessionId, [
+    Map<String, dynamic>? data,
+  ]) => post(
+    '/route-follow-sessions/$sessionId/stop',
+    data ?? <String, dynamic>{},
+  );
 
-    Future<dynamic> completeRouteFollow(String sessionId, [Map<String, dynamic>? data]) =>
-      post('/route-follow-sessions/$sessionId/complete', data ?? <String, dynamic>{});
+  Future<dynamic> completeRouteFollow(
+    String sessionId, [
+    Map<String, dynamic>? data,
+  ]) => post(
+    '/route-follow-sessions/$sessionId/complete',
+    data ?? <String, dynamic>{},
+  );
 
-    Future<dynamic> getMyRouteFollowSession() => get('/route-follow-sessions/me');
+  Future<dynamic> getMyRouteFollowSession() => get('/route-follow-sessions/me');
 
-    Future<dynamic> listRouteFollowSessions([Map<String, dynamic>? params]) =>
-      get('/route-follow-sessions${params == null ? '' : '?${Uri(queryParameters: params.map((k, v) => MapEntry(k, v.toString()))).query}'}');
+  Future<dynamic> listRouteFollowSessions([
+    Map<String, dynamic>? params,
+  ]) => get(
+    '/route-follow-sessions${params == null ? '' : '?${Uri(queryParameters: params.map((k, v) => MapEntry(k, v.toString()))).query}'}',
+  );
 
   Future<void> _refreshToken() async {
     try {
