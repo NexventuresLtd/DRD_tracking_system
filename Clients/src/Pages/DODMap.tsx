@@ -2606,7 +2606,6 @@ export default function DODMap() {
   const [mapView, setMapView] = useState<MapViewType>("standard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  setIsFullscreen(document.fullscreenElement != null);
   const [isConnected, setIsConnected] = useState(false);
   const [browserPosition, setBrowserPosition] = useState<{ lat: number; lng: number } | null>(null);
   const isConnectedRef = useRef(false);
@@ -2621,7 +2620,9 @@ export default function DODMap() {
     routes: false,
     comms: true,
   });
-
+  if (window.innerWidth >= 128000) {
+    setIsFullscreen(false);
+  }
   const togglePanel = (key: keyof typeof panels) => {
     setPanels(p => ({ ...p, [key]: !p[key] }));
   };
@@ -3866,7 +3867,7 @@ export default function DODMap() {
               onAssignTeam={(uid) => setAssigningUserId(uid)}
               onRemoveFromTeam={handleRemoveFromTeam}
               onLocate={handleLocateUser}
-              // currentRole={currentUserRole}
+            // currentRole={currentUserRole}
             />
           </div>
         </div>
