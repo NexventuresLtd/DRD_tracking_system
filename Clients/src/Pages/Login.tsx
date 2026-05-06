@@ -294,7 +294,7 @@ export default function Login() {
                       tabIndex={-1}
                       className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
                     >
-                      {showPass ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                      {showPass ? <FiEyeOff size={18} className="text-blue-900 font-bold" /> : <FiEye size={18} className="text-blue-700 font-bold" />}
                     </button>
                   </div>
                 </div>
