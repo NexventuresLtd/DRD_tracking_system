@@ -20,57 +20,49 @@ class _LoginScreenState extends State<LoginScreen>
   bool _usernameFocused = false;
   bool _passwordFocused = false;
 
-  late AnimationController _fadeController;
-  late AnimationController _slideController;
+  late AnimationController _entranceController;
+  late AnimationController _waveController;
   late AnimationController _pulseController;
+
   late Animation<double> _fadeAnim;
   late Animation<Offset> _slideAnim;
+  late Animation<double> _waveAnim;
   late Animation<double> _pulseAnim;
-  late Animation<double> _logoFadeAnim;
-  late Animation<Offset> _logoSlideAnim;
 
   @override
   void initState() {
     super.initState();
 
-    _fadeController = AnimationController(
+    _entranceController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
     );
-    _slideController = AnimationController(
+    _waveController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
-    );
+      duration: const Duration(seconds: 4),
+    )..repeat();
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 2),
     )..repeat(reverse: true);
 
-    _fadeAnim = CurvedAnimation(parent: _fadeController, curve: Curves.easeOut);
-    _slideAnim = Tween<Offset>(
-      begin: const Offset(0, 0.15),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _slideController, curve: Curves.easeOutCubic));
-    _pulseAnim = Tween<double>(begin: 0.7, end: 1.0)
-        .animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
-
-    _logoFadeAnim = CurvedAnimation(
-      parent: _fadeController,
-      curve: const Interval(0.0, 0.6, curve: Curves.easeOut),
+    _fadeAnim = CurvedAnimation(
+      parent: _entranceController,
+      curve: const Interval(0.2, 1.0, curve: Curves.easeOut),
     );
-    _logoSlideAnim = Tween<Offset>(
-      begin: const Offset(0, -0.3),
+    _slideAnim = Tween<Offset>(
+      begin: const Offset(0, 0.18),
       end: Offset.zero,
     ).animate(CurvedAnimation(
-      parent: _slideController,
-      curve: const Interval(0.0, 0.7, curve: Curves.easeOutCubic),
+      parent: _entranceController,
+      curve: const Interval(0.1, 1.0, curve: Curves.easeOutCubic),
     ));
+    _waveAnim = CurvedAnimation(parent: _waveController, curve: Curves.linear);
+    _pulseAnim = Tween<double>(begin: 0.85, end: 1.0)
+        .animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut));
 
-    Future.delayed(const Duration(milliseconds: 100), () {
-      if (mounted) {
-        _fadeController.forward();
-        _slideController.forward();
-      }
+    Future.delayed(const Duration(milliseconds: 80), () {
+      if (mounted) _entranceController.forward();
     });
   }
 
@@ -78,21 +70,19 @@ class _LoginScreenState extends State<LoginScreen>
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
-    _fadeController.dispose();
-    _slideController.dispose();
+    _entranceController.dispose();
+    _waveController.dispose();
     _pulseController.dispose();
     super.dispose();
   }
 
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
-
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
     final success = await authProvider.login(
       _usernameController.text.trim(),
       _passwordController.text,
     );
-
     if (success && mounted) {
       final userId = authProvider.user?.id;
       if (userId != null) {
@@ -102,442 +92,370 @@ class _LoginScreenState extends State<LoginScreen>
           debugPrint('Location init error: $e');
         }
       }
-      if (mounted) {
-        Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
-      }
+      if (mounted) Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
     }
   }
 
-  String _getFieldError(String? value, String field) {
-    if (value == null || value.isEmpty) {
-      return field == 'username'
-          ? 'Enter your operator ID or username'
-          : 'Access code is required';
+  String _friendlyError(String? raw) {
+    final s = (raw ?? '').toLowerCase();
+    if (s.contains('401') || s.contains('invalid') || s.contains('incorrect') || s.contains('wrong')) {
+      return 'Invalid credentials. Check your ID and access code.';
     }
-    return '';
+    if (s.contains('network') || s.contains('connect') || s.contains('timeout')) {
+      return 'Cannot reach command server. Check your connection.';
+    }
+    if (s.contains('locked') || s.contains('disabled')) {
+      return 'Account locked. Contact your administrator.';
+    }
+    return raw ?? 'Authentication failed. Please try again.';
   }
 
   @override
   Widget build(BuildContext context) {
+    final size = MediaQuery.of(context).size;
+
     return Scaffold(
       backgroundColor: const Color(0xFF050C1A),
       body: Stack(
         children: [
-          // Animated background grid
-          _buildGrid(),
-
-          // Main content
-          SafeArea(
-            child: Center(
-              child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    // Logo section
-                    SlideTransition(
-                      position: _logoSlideAnim,
-                      child: FadeTransition(
-                        opacity: _logoFadeAnim,
-                        child: _buildLogoSection(),
-                      ),
-                    ),
-                    const SizedBox(height: 40),
-
-                    // Form card
-                    SlideTransition(
-                      position: _slideAnim,
-                      child: FadeTransition(
-                        opacity: _fadeAnim,
-                        child: _buildFormCard(),
-                      ),
-                    ),
-                    const SizedBox(height: 24),
-
-                    // Footer
-                    FadeTransition(
-                      opacity: _fadeAnim,
-                      child: _buildFooter(),
-                    ),
-                  ],
-                ),
+          // ── Background gradient ────────────────────────────────────────
+          Container(
+            decoration: const BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: [Color(0xFF0A1628), Color(0xFF050C1A)],
               ),
             ),
           ),
-        ],
-      ),
-    );
-  }
 
-  Widget _buildGrid() {
-    return CustomPaint(
-      painter: _GridPainter(),
-      size: Size.infinite,
-    );
-  }
+          // ── Animated bubbles (background decoration) ───────────────────
+          AnimatedBuilder(
+            animation: _waveAnim,
+            builder: (context2, child) {
+              return CustomPaint(
+                painter: _BubblePainter(_waveAnim.value),
+                size: Size(size.width, size.height),
+              );
+            },
+          ),
 
-  Widget _buildLogoSection() {
-    return Column(
-      children: [
-        // Shield icon with pulse
-        AnimatedBuilder(
-          animation: _pulseAnim,
-          builder: (_, child) {
-            return Transform.scale(
-              scale: _pulseAnim.value,
-              child: child,
-            );
-          },
-          child: Container(
-            width: 76,
-            height: 76,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: DRDTheme.primaryColor.withValues(alpha: 0.12),
-              border: Border.all(
-                color: DRDTheme.primaryColor.withValues(alpha: 0.5),
-                width: 1.5,
-              ),
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                const Icon(
-                  Icons.shield_outlined,
-                  size: 38,
-                  color: DRDTheme.primaryColor,
-                ),
-                Positioned(
-                  top: 12,
-                  right: 12,
-                  child: Container(
-                    width: 10,
-                    height: 10,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: const Color(0xFF22C55E),
-                      border: Border.all(
-                        color: const Color(0xFF050C1A),
-                        width: 1.5,
-                      ),
-                    ),
+          // ── Top wave section ───────────────────────────────────────────
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: ClipPath(
+              clipper: _WaveClipper(),
+              child: Container(
+                height: size.height * 0.42,
+                decoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [Color(0xFF1A3A6B), Color(0xFF0D2144)],
                   ),
                 ),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 16),
-        const Text(
-          'DRD TRACKING',
-          style: TextStyle(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: Colors.white,
-            letterSpacing: 4,
-            fontFamily: 'Poppins',
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(
-          'FIELD COORDINATION SYSTEM',
-          style: TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
-            color: Colors.white.withValues(alpha: 0.35),
-            letterSpacing: 3,
-            fontFamily: 'Poppins',
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildFormCard() {
-    return Container(
-      width: double.infinity,
-      constraints: const BoxConstraints(maxWidth: 400),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0F1C2E),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.06),
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.5),
-            blurRadius: 40,
-            offset: const Offset(0, 20),
-          ),
-        ],
-      ),
-      child: Padding(
-        padding: const EdgeInsets.all(28),
-        child: Form(
-          key: _formKey,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // Header
-              Row(
-                children: [
-                  const Icon(
-                    Icons.sensors,
-                    size: 13,
-                    color: DRDTheme.primaryColor,
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'AUTHENTICATE',
-                    style: TextStyle(
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white.withValues(alpha: 0.5),
-                      letterSpacing: 3,
-                      fontFamily: 'Poppins',
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 24),
-
-              // Error message from auth provider
-              Consumer<AuthProvider>(
-                builder: (context, auth, _) {
-                  if (auth.errorMessage == null) return const SizedBox.shrink();
-                  String friendlyMsg = auth.errorMessage!;
-                  if (auth.errorMessage!.toLowerCase().contains('401') ||
-                      auth.errorMessage!.toLowerCase().contains('invalid') ||
-                      auth.errorMessage!.toLowerCase().contains('incorrect') ||
-                      auth.errorMessage!.toLowerCase().contains('wrong')) {
-                    friendlyMsg = 'Invalid credentials. Verify your operator ID and access code.';
-                  } else if (auth.errorMessage!.toLowerCase().contains('network') ||
-                      auth.errorMessage!.toLowerCase().contains('connect') ||
-                      auth.errorMessage!.toLowerCase().contains('timeout')) {
-                    friendlyMsg = 'Cannot reach the command server. Check your network connection.';
-                  } else if (auth.errorMessage!.toLowerCase().contains('locked') ||
-                      auth.errorMessage!.toLowerCase().contains('disabled')) {
-                    friendlyMsg = 'Account is locked. Contact your system administrator.';
-                  }
-                  return AnimatedContainer(
-                    duration: const Duration(milliseconds: 300),
-                    margin: const EdgeInsets.only(bottom: 20),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: DRDTheme.dangerColor.withValues(alpha: 0.08),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(
-                        color: DRDTheme.dangerColor.withValues(alpha: 0.25),
-                      ),
-                    ),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Icon(
-                          Icons.warning_amber_rounded,
-                          color: DRDTheme.dangerColor,
-                          size: 16,
+                child: SafeArea(
+                  bottom: false,
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      const SizedBox(height: 16),
+                      // Shield icon with pulse
+                      AnimatedBuilder(
+                        animation: _pulseAnim,
+                        builder: (_, child) => Transform.scale(
+                          scale: _pulseAnim.value,
+                          child: child,
                         ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(
-                            friendlyMsg,
-                            style: const TextStyle(
-                              color: DRDTheme.dangerColor,
-                              fontSize: 12,
-                              fontFamily: 'Poppins',
-                              height: 1.4,
+                        child: Container(
+                          width: 72,
+                          height: 72,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: DRDTheme.primaryColor.withValues(alpha: 0.2),
+                            border: Border.all(
+                              color: DRDTheme.primaryColor.withValues(alpha: 0.6),
+                              width: 2,
                             ),
+                            boxShadow: [
+                              BoxShadow(
+                                color: DRDTheme.primaryColor.withValues(alpha: 0.3),
+                                blurRadius: 20,
+                                spreadRadius: 2,
+                              ),
+                            ],
+                          ),
+                          child: const Icon(
+                            Icons.shield_outlined,
+                            size: 36,
+                            color: Colors.white,
                           ),
                         ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-
-              // Username field
-              _AnimatedField(
-                label: 'OPERATOR ID / USERNAME',
-                hint: 'commander.alpha or user@drd.mil',
-                icon: Icons.person_outline_rounded,
-                controller: _usernameController,
-                focused: _usernameFocused,
-                onFocusChange: (v) => setState(() => _usernameFocused = v),
-                validator: (v) {
-                  final err = _getFieldError(v, 'username');
-                  return err.isEmpty ? null : err;
-                },
-              ),
-              const SizedBox(height: 16),
-
-              // Password field
-              _AnimatedField(
-                label: 'ACCESS CODE',
-                hint: '••••••••••',
-                icon: Icons.lock_outline_rounded,
-                controller: _passwordController,
-                obscureText: _obscurePassword,
-                focused: _passwordFocused,
-                onFocusChange: (v) => setState(() => _passwordFocused = v),
-                suffix: IconButton(
-                  icon: Icon(
-                    _obscurePassword
-                        ? Icons.visibility_off_outlined
-                        : Icons.visibility_outlined,
-                    color: Colors.white38,
-                    size: 18,
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'drd_tracking',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 26,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 2,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'FIELD COORDINATION SYSTEM',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.5),
+                          fontSize: 9,
+                          letterSpacing: 3,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                    ],
                   ),
-                  onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
                 ),
-                validator: (v) {
-                  final err = _getFieldError(v, 'password');
-                  return err.isEmpty ? null : err;
-                },
               ),
-              const SizedBox(height: 28),
-
-              // Submit button
-              Consumer<AuthProvider>(
-                builder: (context, auth, _) {
-                  return _LoginButton(
-                    isLoading: auth.isLoading,
-                    onPressed: auth.isLoading ? null : _handleLogin,
-                  );
-                },
-              ),
-            ],
+            ),
           ),
-        ),
+
+          // ── Bottom form section ────────────────────────────────────────
+          Positioned(
+            top: size.height * 0.34,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SlideTransition(
+              position: _slideAnim,
+              child: FadeTransition(
+                opacity: _fadeAnim,
+                child: SingleChildScrollView(
+                  padding: EdgeInsets.fromLTRB(
+                    24,
+                    24,
+                    24,
+                    24 + MediaQuery.of(context).viewInsets.bottom,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Welcome Back',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                      const SizedBox(height: 4),
+                      Text(
+                        'Sign in to your tactical account',
+                        style: TextStyle(
+                          color: Colors.white.withValues(alpha: 0.45),
+                          fontSize: 12,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
+                      const SizedBox(height: 28),
+
+                      Form(
+                        key: _formKey,
+                        child: Column(
+                          children: [
+                            // Error banner
+                            Consumer<AuthProvider>(
+                              builder: (context, auth, _) {
+                                if (auth.errorMessage == null) return const SizedBox.shrink();
+                                return AnimatedContainer(
+                                  duration: const Duration(milliseconds: 300),
+                                  margin: const EdgeInsets.only(bottom: 18),
+                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+                                  decoration: BoxDecoration(
+                                    color: DRDTheme.dangerColor.withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: DRDTheme.dangerColor.withValues(alpha: 0.3)),
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      const Icon(Icons.warning_amber_rounded, color: DRDTheme.dangerColor, size: 16),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: Text(
+                                          _friendlyError(auth.errorMessage),
+                                          style: const TextStyle(
+                                            color: DRDTheme.dangerColor,
+                                            fontSize: 11,
+                                            fontFamily: 'Poppins',
+                                            height: 1.4,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                );
+                              },
+                            ),
+
+                            // Username field
+                            _buildField(
+                              label: 'OPERATOR ID / USERNAME',
+                              hint: 'commander.alpha or user@drd.mil',
+                              icon: Icons.person_outline_rounded,
+                              controller: _usernameController,
+                              focused: _usernameFocused,
+                              onFocusChange: (v) => setState(() => _usernameFocused = v),
+                              validator: (v) => (v == null || v.isEmpty) ? 'Enter your operator ID' : null,
+                            ),
+                            const SizedBox(height: 16),
+
+                            // Password field
+                            _buildField(
+                              label: 'ACCESS CODE',
+                              hint: '••••••••••',
+                              icon: Icons.lock_outline_rounded,
+                              controller: _passwordController,
+                              obscureText: _obscurePassword,
+                              focused: _passwordFocused,
+                              onFocusChange: (v) => setState(() => _passwordFocused = v),
+                              suffix: IconButton(
+                                padding: EdgeInsets.zero,
+                                icon: Icon(
+                                  _obscurePassword
+                                      ? Icons.visibility_off_outlined
+                                      : Icons.visibility_outlined,
+                                  color: Colors.white38,
+                                  size: 18,
+                                ),
+                                onPressed: () => setState(() => _obscurePassword = !_obscurePassword),
+                              ),
+                              validator: (v) => (v == null || v.isEmpty) ? 'Enter your access code' : null,
+                            ),
+                            const SizedBox(height: 28),
+
+                            // Submit button
+                            Consumer<AuthProvider>(
+                              builder: (context, auth, _) => _LoginButton(
+                                isLoading: auth.isLoading,
+                                onPressed: auth.isLoading ? null : _handleLogin,
+                              ),
+                            ),
+
+                            const SizedBox(height: 24),
+
+                            // Footer
+                            Center(
+                              child: Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Container(
+                                    width: 5,
+                                    height: 5,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF22C55E),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    'SECURE ENCRYPTED CONNECTION',
+                                    style: TextStyle(
+                                      fontSize: 8,
+                                      letterSpacing: 2,
+                                      color: Colors.white.withValues(alpha: 0.2),
+                                      fontFamily: 'Poppins',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildFooter() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Container(
-          width: 6,
-          height: 6,
-          decoration: const BoxDecoration(
-            shape: BoxShape.circle,
-            color: Color(0xFF22C55E),
-          ),
-        ),
-        const SizedBox(width: 8),
-        Text(
-          'SECURE ENCRYPTED CONNECTION',
-          style: TextStyle(
-            fontSize: 9,
-            fontWeight: FontWeight.w600,
-            color: Colors.white.withValues(alpha: 0.2),
-            letterSpacing: 2,
-            fontFamily: 'Poppins',
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _AnimatedField extends StatefulWidget {
-  final String label;
-  final String hint;
-  final IconData icon;
-  final TextEditingController controller;
-  final bool obscureText;
-  final bool focused;
-  final ValueChanged<bool> onFocusChange;
-  final Widget? suffix;
-  final String? Function(String?)? validator;
-
-  const _AnimatedField({
-    required this.label,
-    required this.hint,
-    required this.icon,
-    required this.controller,
-    this.obscureText = false,
-    required this.focused,
-    required this.onFocusChange,
-    this.suffix,
-    this.validator,
-  });
-
-  @override
-  State<_AnimatedField> createState() => _AnimatedFieldState();
-}
-
-class _AnimatedFieldState extends State<_AnimatedField> {
-  @override
-  Widget build(BuildContext context) {
+  Widget _buildField({
+    required String label,
+    required String hint,
+    required IconData icon,
+    required TextEditingController controller,
+    bool obscureText = false,
+    required bool focused,
+    required ValueChanged<bool> onFocusChange,
+    Widget? suffix,
+    String? Function(String?)? validator,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text(
-          widget.label,
+          label,
           style: TextStyle(
             fontSize: 9,
             fontWeight: FontWeight.w700,
-            color: widget.focused
-                ? DRDTheme.primaryColor
-                : Colors.white.withValues(alpha: 0.3),
             letterSpacing: 2,
             fontFamily: 'Poppins',
+            color: focused ? DRDTheme.primaryColor : Colors.white.withValues(alpha: 0.35),
           ),
         ),
         const SizedBox(height: 8),
         AnimatedContainer(
           duration: const Duration(milliseconds: 200),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
+            color: focused ? const Color(0xFF0D2144) : const Color(0xFF0A1628),
             border: Border.all(
-              color: widget.focused
+              color: focused
                   ? DRDTheme.primaryColor.withValues(alpha: 0.6)
                   : Colors.white.withValues(alpha: 0.08),
-              width: widget.focused ? 1.5 : 1,
+              width: focused ? 1.5 : 1,
             ),
-            color: widget.focused
-                ? DRDTheme.primaryColor.withValues(alpha: 0.05)
-                : const Color(0xFF0A1628),
           ),
           child: Focus(
-            onFocusChange: widget.onFocusChange,
+            onFocusChange: onFocusChange,
             child: TextFormField(
-              controller: widget.controller,
-              obscureText: widget.obscureText,
+              controller: controller,
+              obscureText: obscureText,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 13,
                 fontFamily: 'Poppins',
               ),
               decoration: InputDecoration(
-                hintText: widget.hint,
+                hintText: hint,
                 hintStyle: TextStyle(
                   color: Colors.white.withValues(alpha: 0.2),
                   fontSize: 12,
                   fontFamily: 'Poppins',
                 ),
                 prefixIcon: Icon(
-                  widget.icon,
-                  color: widget.focused
-                      ? DRDTheme.primaryColor
-                      : Colors.white.withValues(alpha: 0.25),
+                  icon,
+                  color: focused ? DRDTheme.primaryColor : Colors.white.withValues(alpha: 0.25),
                   size: 18,
                 ),
-                suffixIcon: widget.suffix,
+                suffixIcon: suffix,
                 border: InputBorder.none,
-                contentPadding: const EdgeInsets.symmetric(
-                  horizontal: 16,
-                  vertical: 14,
-                ),
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
                 errorStyle: const TextStyle(
                   color: DRDTheme.dangerColor,
                   fontSize: 10,
                   fontFamily: 'Poppins',
                 ),
               ),
-              validator: widget.validator,
+              validator: validator,
             ),
           ),
         ),
@@ -549,7 +467,6 @@ class _AnimatedFieldState extends State<_AnimatedField> {
 class _LoginButton extends StatefulWidget {
   final bool isLoading;
   final VoidCallback? onPressed;
-
   const _LoginButton({required this.isLoading, required this.onPressed});
 
   @override
@@ -558,54 +475,49 @@ class _LoginButton extends StatefulWidget {
 
 class _LoginButtonState extends State<_LoginButton>
     with SingleTickerProviderStateMixin {
-  late AnimationController _pressController;
-  late Animation<double> _pressAnim;
+  late AnimationController _ctrl;
+  late Animation<double> _scale;
 
   @override
   void initState() {
     super.initState();
-    _pressController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 100),
-    );
-    _pressAnim = Tween<double>(begin: 1.0, end: 0.97)
-        .animate(_pressController);
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 100));
+    _scale = Tween<double>(begin: 1.0, end: 0.97).animate(_ctrl);
   }
 
   @override
   void dispose() {
-    _pressController.dispose();
+    _ctrl.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     return ScaleTransition(
-      scale: _pressAnim,
+      scale: _scale,
       child: GestureDetector(
-        onTapDown: (_) => _pressController.forward(),
-        onTapUp: (_) => _pressController.reverse(),
-        onTapCancel: () => _pressController.reverse(),
+        onTapDown: (_) => _ctrl.forward(),
+        onTapUp: (_) => _ctrl.reverse(),
+        onTapCancel: () => _ctrl.reverse(),
         child: SizedBox(
           width: double.infinity,
-          height: 50,
+          height: 52,
           child: ElevatedButton(
             onPressed: widget.onPressed,
             style: ElevatedButton.styleFrom(
-              backgroundColor: widget.isLoading || widget.onPressed == null
-                  ? DRDTheme.primaryColor.withValues(alpha: 0.5)
+              backgroundColor: widget.onPressed == null
+                  ? DRDTheme.primaryColor.withValues(alpha: 0.45)
                   : DRDTheme.primaryColor,
               foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              elevation: 0,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              elevation: widget.onPressed == null ? 0 : 4,
+              shadowColor: DRDTheme.primaryColor.withValues(alpha: 0.4),
             ),
             child: widget.isLoading
-                ? Row(
+                ? const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 16,
                         height: 16,
                         child: CircularProgressIndicator(
@@ -613,17 +525,8 @@ class _LoginButtonState extends State<_LoginButton>
                           valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Text(
-                        'AUTHENTICATING...',
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white.withValues(alpha: 0.8),
-                          letterSpacing: 2,
-                          fontFamily: 'Poppins',
-                        ),
-                      ),
+                      SizedBox(width: 12),
+                      Text('AUTHENTICATING...', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 2, fontFamily: 'Poppins')),
                     ],
                   )
                 : const Row(
@@ -631,15 +534,7 @@ class _LoginButtonState extends State<_LoginButton>
                     children: [
                       Icon(Icons.shield_outlined, size: 16),
                       SizedBox(width: 8),
-                      Text(
-                        'AUTHENTICATE',
-                        style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w700,
-                          letterSpacing: 2.5,
-                          fontFamily: 'Poppins',
-                        ),
-                      ),
+                      Text('AUTHENTICATE', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, letterSpacing: 2.5, fontFamily: 'Poppins')),
                     ],
                   ),
           ),
@@ -649,32 +544,50 @@ class _LoginButtonState extends State<_LoginButton>
   }
 }
 
-class _GridPainter extends CustomPainter {
+// ── Wave clip shape ────────────────────────────────────────────────────────
+class _WaveClipper extends CustomClipper<Path> {
   @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = const Color(0xFF1E3A5F).withValues(alpha: 0.15)
-      ..strokeWidth = 0.5
-      ..style = PaintingStyle.stroke;
-
-    const spacing = 40.0;
-    for (double x = 0; x <= size.width; x += spacing) {
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), paint);
-    }
-    for (double y = 0; y <= size.height; y += spacing) {
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), paint);
-    }
-
-    final glowPaint = Paint()
-      ..color = const Color(0xFF3B82F6).withValues(alpha: 0.06)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 80);
-    canvas.drawCircle(
-      Offset(size.width * 0.5, size.height * 0.3),
-      size.width * 0.5,
-      glowPaint,
-    );
+  Path getClip(Size size) {
+    final path = Path();
+    path.lineTo(0, size.height - 44);
+    path.quadraticBezierTo(size.width * 0.25, size.height, size.width * 0.5, size.height - 22);
+    path.quadraticBezierTo(size.width * 0.75, size.height - 44, size.width, size.height - 22);
+    path.lineTo(size.width, 0);
+    path.close();
+    return path;
   }
 
   @override
-  bool shouldRepaint(_GridPainter _) => false;
+  bool shouldReclip(_WaveClipper _) => false;
+}
+
+// ── Floating bubble background painter ────────────────────────────────────
+class _BubblePainter extends CustomPainter {
+  final double t;
+  _BubblePainter(this.t);
+
+  static const _bubbles = [
+    (0.1, 0.2, 60.0), (0.8, 0.15, 40.0), (0.6, 0.35, 25.0),
+    (0.2, 0.55, 35.0), (0.9, 0.6, 50.0), (0.4, 0.8, 20.0),
+  ];
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var (x, y, r) in _bubbles) {
+      final dy = (t * 0.04) % 1.0;
+      final cy = ((y - dy + 1.0) % 1.0) * size.height;
+      final paint = Paint()
+        ..color = const Color(0xFF3B82F6).withValues(alpha: 0.06)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(Offset(x * size.width, cy), r, paint);
+      final stroke = Paint()
+        ..color = const Color(0xFF3B82F6).withValues(alpha: 0.08)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1;
+      canvas.drawCircle(Offset(x * size.width, cy), r, stroke);
+    }
+  }
+
+  @override
+  bool shouldRepaint(_BubblePainter old) => old.t != t;
 }

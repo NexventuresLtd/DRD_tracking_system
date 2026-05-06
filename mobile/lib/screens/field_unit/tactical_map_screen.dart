@@ -864,11 +864,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 // ── GPS / Status HUD ───────────────────────────────────────
                 Positioned(top: topPad + 52, left: 10, child: _buildHud(loc)),
 
-                // ── Team count badge ───────────────────────────────────────
+                // ── Team badge + Profile button ────────────────────────────
                 Positioned(
                   top: topPad + 52,
                   right: 10,
-                  child: _buildTeamBadge(),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      _buildTeamBadge(),
+                      const SizedBox(height: 8),
+                      _buildProfileButton(auth),
+                    ],
+                  ),
                 ),
 
                 // ── Mark mode crosshair ────────────────────────────────────
@@ -892,28 +899,29 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
                 // ── SOS button ─────────────────────────────────────────────
                 Positioned(
-                  bottom: _panelOpen ? panelHeight + 16 : 24,
+                  bottom: _panelOpen ? panelHeight + 16 : 28,
                   left: 12,
                   child: _buildSOSButton(),
                 ),
 
                 // ── Navigation FABs ────────────────────────────────────────
                 Positioned(
-                  bottom: _panelOpen ? panelHeight + 16 : 24,
+                  bottom: _panelOpen ? panelHeight + 16 : 60,
                   right: 12,
                   child: _buildNavFabs(loc, myPos),
                 ),
 
-                // ── Bottom slide panel ─────────────────────────────────────
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 280),
-                  curve: Curves.easeOutCubic,
-                  bottom: 0,
-                  left: 0,
-                  right: 0,
-                  height: _panelOpen ? panelHeight : 48,
-                  child: _buildBottomPanel(auth, panelHeight),
-                ),
+                // ── Comms panel — only visible when opened ─────────────────
+                if (_panelOpen)
+                  AnimatedPositioned(
+                    duration: const Duration(milliseconds: 280),
+                    curve: Curves.easeOutCubic,
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: panelHeight,
+                    child: _buildBottomPanel(auth, panelHeight),
+                  ),
               ],
             ],
           ),
@@ -1153,49 +1161,59 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               .take(2)
               .map((w) => w[0].toUpperCase())
               .join();
+          final shortName = name.split(' ').first;
 
           return Marker(
             point: LatLng(lat, lng),
             width: 56,
-            height: 68,
+            height: 72,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                // Solid blue circle with white initials
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 2,
-                  ),
+                  width: 38,
+                  height: 38,
                   decoration: BoxDecoration(
-                    color: DRDTheme.surfaceColor.withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(4),
+                    shape: BoxShape.circle,
+                    color: DRDTheme.primaryColor,
+                    border: Border.all(color: statusColor, width: 2.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: DRDTheme.primaryColor.withValues(alpha: 0.45),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
-                  child: Text(
-                    initials,
-                    style: TextStyle(
-                      color: statusColor,
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
+                  child: Center(
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 2),
+                const SizedBox(height: 3),
+                // Name label
                 Container(
-                  width: 32,
-                  height: 32,
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: statusColor.withValues(alpha: 0.15),
-                    border: Border.all(color: statusColor, width: 2.5),
+                    color: Colors.black.withValues(alpha: 0.72),
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  child: Center(
-                    child: Container(
-                      width: 10,
-                      height: 10,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: statusColor,
-                      ),
+                  child: Text(
+                    shortName,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),
@@ -1989,6 +2007,185 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     );
   }
 
+  Widget _buildProfileButton(AuthProvider auth) {
+    final user = auth.user;
+    final name = user?.fullName ?? user?.username ?? 'Operator';
+    final initials = name
+        .split(' ')
+        .where((w) => w.isNotEmpty)
+        .take(2)
+        .map((w) => w[0].toUpperCase())
+        .join();
+
+    return GestureDetector(
+      onTap: () {
+        showModalBottomSheet(
+          context: context,
+          backgroundColor: const Color(0xFF0F1C2E),
+          shape: const RoundedRectangleBorder(
+            borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+          ),
+          builder: (_) => Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 36,
+                  height: 4,
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.white24,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+                // Avatar
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: DRDTheme.primaryColor,
+                    border: Border.all(
+                      color: DRDTheme.primaryColor.withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: DRDTheme.primaryColor.withValues(alpha: 0.3),
+                        blurRadius: 16,
+                      ),
+                    ],
+                  ),
+                  child: Center(
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 22,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Text(
+                  name,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                if (user?.username != null && user!.username != name) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    '@${user.username}',
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.4),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: DRDTheme.primaryColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
+                  ),
+                  child: Text(
+                    (user?.role ?? 'FIELD UNIT').toUpperCase().replaceAll('_', ' '),
+                    style: const TextStyle(
+                      color: DRDTheme.primaryColor,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                ),
+                if (user?.teamName != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    user!.teamName!,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.5),
+                      fontSize: 12,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 24),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _handleLogout();
+                    },
+                    icon: const Icon(Icons.logout_rounded, size: 16),
+                    label: const Text('SIGN OUT'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: DRDTheme.dangerColor,
+                      side: BorderSide(color: DRDTheme.dangerColor.withValues(alpha: 0.5)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        decoration: BoxDecoration(
+          color: DRDTheme.primaryColor,
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: DRDTheme.primaryColor.withValues(alpha: 0.4),
+              blurRadius: 8,
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 22,
+              height: 22,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white.withValues(alpha: 0.2),
+              ),
+              child: Center(
+                child: Text(
+                  initials,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(width: 5),
+            const Text(
+              'PROFILE',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 8,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildCrosshair(double screenH) {
     return Center(
       child: Column(
@@ -2024,14 +2221,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         _actionBtn(
           icon: _markMode ? Icons.close : Icons.push_pin_outlined,
           label: _markMode ? 'CANCEL' : 'MARK',
-          color: _markMode ? DRDTheme.warningColor : DRDTheme.infoColor,
+          color: _markMode ? DRDTheme.warningColor : DRDTheme.primaryColor,
+          solid: !_markMode,
           onTap: () => setState(() => _markMode = !_markMode),
         ),
         const SizedBox(height: 6),
         _actionBtn(
           icon: Icons.chat_bubble_outline,
           label: 'COMMS',
-          color: DRDTheme.successColor,
+          color: DRDTheme.primaryColor,
+          solid: true,
           badge: _messages.where((m) => m['is_read'] == false).length,
           onTap: () => setState(() => _panelOpen = true),
         ),
@@ -2039,12 +2238,55 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         _actionBtn(
           icon: Icons.alt_route,
           label: 'ROUTES',
-          color: DRDTheme.accentColor,
+          color: DRDTheme.primaryColor,
+          solid: true,
           badge: _myRoutes.length,
           onTap: _showRoutesSheet,
         ),
+        const SizedBox(height: 14),
+        // Logout button
+        _actionBtn(
+          icon: Icons.logout_rounded,
+          label: 'EXIT',
+          color: DRDTheme.dangerColor,
+          solid: true,
+          onTap: _handleLogout,
+        ),
       ],
     );
+  }
+
+  Future<void> _handleLogout() async {
+    final auth = context.read<AuthProvider>();
+    final loc = context.read<LocationProvider>();
+    final nav = Navigator.of(context);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0F1C2E),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Row(
+          children: [
+            Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 18),
+            SizedBox(width: 8),
+            Text('Sign Out', style: TextStyle(color: Colors.white, fontSize: 15)),
+          ],
+        ),
+        content: Text(
+          'End your field session and sign out?',
+          style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: TextStyle(color: Colors.white.withValues(alpha: 0.4)))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign Out', style: TextStyle(color: Color(0xFFEF4444)))),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      await loc.stopTracking();
+      await auth.logout();
+      if (mounted) nav.pushReplacementNamed('/login');
+    }
   }
 
   Widget _actionBtn({
@@ -2053,6 +2295,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     required Color color,
     required VoidCallback onTap,
     int badge = 0,
+    bool solid = false,
   }) {
     return GestureDetector(
       onTap: onTap,
@@ -2063,25 +2306,25 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             width: 48,
             height: 48,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.15),
+              color: solid ? color : color.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: color.withValues(alpha: 0.4), width: 1),
+              border: Border.all(color: solid ? color : color.withValues(alpha: 0.4), width: 1),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.3),
-                  blurRadius: 4,
+                  color: solid ? color.withValues(alpha: 0.35) : Colors.black.withValues(alpha: 0.3),
+                  blurRadius: solid ? 8 : 4,
                 ),
               ],
             ),
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(icon, color: color, size: 18),
+                Icon(icon, color: solid ? Colors.white : color, size: 18),
                 const SizedBox(height: 2),
                 Text(
                   label,
                   style: TextStyle(
-                    color: color,
+                    color: solid ? Colors.white : color,
                     fontSize: 7,
                     fontWeight: FontWeight.bold,
                     letterSpacing: 0.5,
@@ -2236,72 +2479,55 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       ),
       child: Column(
         children: [
-          // Handle + toggle
-          GestureDetector(
-            onTap: () => setState(() => _panelOpen = !_panelOpen),
-            child: Container(
-              width: double.infinity,
-              height: 48,
-              padding: const EdgeInsets.symmetric(horizontal: 16),
-              child: Row(
-                children: [
-                  Icon(
-                    _panelOpen
-                        ? Icons.keyboard_arrow_down
-                        : Icons.keyboard_arrow_up,
-                    color: Colors.white38,
-                    size: 18,
+          // Handle bar + header
+          Container(
+            width: double.infinity,
+            height: 48,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                const Icon(Icons.chat_bubble_outline, size: 13, color: DRDTheme.primaryColor),
+                const SizedBox(width: 8),
+                const Text(
+                  'COMMS',
+                  style: TextStyle(
+                    color: DRDTheme.primaryColor,
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1,
                   ),
-                  const SizedBox(width: 10),
-                  const Icon(
-                    Icons.chat_bubble_outline,
-                    size: 13,
-                    color: DRDTheme.successColor,
-                  ),
-                  const SizedBox(width: 5),
-                  Text(
-                    'COMMS',
-                    style: const TextStyle(
-                      color: DRDTheme.successColor,
-                      fontSize: 11,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1,
+                ),
+                if (unread > 0) ...[
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: DRDTheme.dangerColor,
+                      borderRadius: BorderRadius.circular(8),
                     ),
-                  ),
-                  if (unread > 0) ...[
-                    const SizedBox(width: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 1,
-                      ),
-                      decoration: BoxDecoration(
-                        color: DRDTheme.dangerColor,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: Text(
-                        '$unread',
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                  ],
-                  const Spacer(),
-                  Text(
-                    '${_messages.length} messages',
-                    style: const TextStyle(color: Colors.white24, fontSize: 10),
+                    child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
                   ),
                 ],
-              ),
+                const Spacer(),
+                Text('${_messages.length} msgs', style: const TextStyle(color: Colors.white24, fontSize: 10)),
+                const SizedBox(width: 10),
+                GestureDetector(
+                  onTap: () => setState(() => _panelOpen = false),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white54, size: 16),
+                  ),
+                ),
+              ],
             ),
           ),
 
-          // Comms content — Expanded fills remainder so there's no overflow
-          if (_panelOpen)
-            Expanded(child: _buildCommsTab(auth)),
+          // Comms content
+          Expanded(child: _buildCommsTab(auth)),
         ],
       ),
     );
@@ -2343,30 +2569,54 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                         }[priority] ??
                         Colors.white54;
 
+                    final senderInitials = sender
+                        .split(' ')
+                        .where((w) => w.isNotEmpty)
+                        .take(2)
+                        .map((w) => w[0].toUpperCase())
+                        .join();
+
                     return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 3),
+                      padding: const EdgeInsets.symmetric(vertical: 4),
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
                         mainAxisAlignment: fromMe
                             ? MainAxisAlignment.end
                             : MainAxisAlignment.start,
                         children: [
+                          // Avatar (left side for others)
+                          if (!fromMe) ...[
+                            Container(
+                              width: 26,
+                              height: 26,
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: DRDTheme.primaryColor,
+                              ),
+                              child: Center(
+                                child: Text(
+                                  senderInitials,
+                                  style: const TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 9,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                          ],
                           Flexible(
                             child: Container(
-                              padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                              padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
                               decoration: BoxDecoration(
                                 color: fromMe
-                                    ? DRDTheme.primaryColor.withValues(
-                                        alpha: 0.25,
-                                      )
-                                    : DRDTheme.backgroundColor.withValues(
-                                        alpha: 0.7,
-                                      ),
-                                borderRadius: BorderRadius.circular(8),
+                                    ? DRDTheme.primaryColor.withValues(alpha: 0.25)
+                                    : DRDTheme.backgroundColor.withValues(alpha: 0.7),
+                                borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
                                   color: fromMe
-                                      ? DRDTheme.primaryColor.withValues(
-                                          alpha: 0.4,
-                                        )
+                                      ? DRDTheme.primaryColor.withValues(alpha: 0.4)
                                       : Colors.white.withValues(alpha: 0.08),
                                 ),
                               ),
@@ -2377,12 +2627,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                                 children: [
                                   if (!fromMe)
                                     Text(
-                                      sender.toUpperCase(),
+                                      sender,
                                       style: TextStyle(
-                                        color: priorityColor,
-                                        fontSize: 8.5,
+                                        color: DRDTheme.primaryColor.withValues(alpha: 0.9),
+                                        fontSize: 9,
                                         fontWeight: FontWeight.bold,
-                                        letterSpacing: 0.5,
                                       ),
                                     ),
                                   if (!fromMe) const SizedBox(height: 2),
@@ -2393,6 +2642,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                                       fontSize: 12,
                                     ),
                                   ),
+                                  if (priority != 'normal') ...[
+                                    const SizedBox(height: 3),
+                                    Text(
+                                      priority.toUpperCase(),
+                                      style: TextStyle(
+                                        color: priorityColor,
+                                        fontSize: 8,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.8,
+                                      ),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),

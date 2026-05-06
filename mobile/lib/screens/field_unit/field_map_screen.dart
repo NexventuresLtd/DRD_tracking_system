@@ -54,7 +54,10 @@ class _FieldMapScreenState extends State<FieldMapScreen>
       end: 1.0,
     ).animate(CurvedAnimation(parent: _pulseController, curve: Curves.easeOut));
 
-    _loadMapData();
+    // Delay first load until after first frame so providers are ready
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _loadMapData();
+    });
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 5),
       (_) => _loadMapData(),
@@ -415,18 +418,14 @@ class _FieldMapScreenState extends State<FieldMapScreen>
             // ── Top-left status HUD ──────────────────────────────────────
             Positioned(top: 8, left: 8, child: _buildStatusHud(locProvider)),
 
-            // ── Top-right controls (team badge + logout) ─────────────────
+            // ── Team count badge ─────────────────────────────────────────
+            Positioned(top: 8, right: 8, child: _buildTeamBadge()),
+
+            // ── Logout button — bottom left, clearly visible ─────────────
             Positioned(
-              top: 8,
-              right: 8,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  _buildTeamBadge(),
-                  const SizedBox(height: 8),
-                  _buildLogoutButton(),
-                ],
-              ),
+              bottom: 96,
+              left: 16,
+              child: _buildLogoutButton(),
             ),
 
             // ── Active route summary ────────────────────────────────────
@@ -445,7 +444,7 @@ class _FieldMapScreenState extends State<FieldMapScreen>
 
             // ── FABs (center + refresh) ──────────────────────────────────
             Positioned(
-              bottom: 16,
+              bottom: 56,
               right: 16,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -531,9 +530,6 @@ class _FieldMapScreenState extends State<FieldMapScreen>
         .map((loc) {
           final statusColor =
               DRDTheme.statusColors[loc['status'] as String?] ?? Colors.grey;
-          final teamColor =
-              DRDTheme.teamColors[loc['team_name'] as String?] ??
-              DRDTheme.primaryColor;
           final rawName = loc['user_name'] as String? ?? '?';
           final initials = rawName
               .split(' ')
@@ -549,47 +545,54 @@ class _FieldMapScreenState extends State<FieldMapScreen>
           return Marker(
             point: LatLng(lat, lng),
             width: 52,
-            height: 64,
+            height: 68,
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Name label
+                // Solid circle with initials
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 2,
-                  ),
+                  width: 36,
+                  height: 36,
                   decoration: BoxDecoration(
-                    color: DRDTheme.surfaceColor.withValues(alpha: 0.92),
-                    borderRadius: BorderRadius.circular(4),
+                    shape: BoxShape.circle,
+                    color: DRDTheme.primaryColor,
+                    border: Border.all(color: statusColor, width: 2.5),
+                    boxShadow: [
+                      BoxShadow(
+                        color: DRDTheme.primaryColor.withValues(alpha: 0.4),
+                        blurRadius: 8,
+                        spreadRadius: 1,
+                      ),
+                    ],
                   ),
-                  child: Text(
-                    initials,
-                    style: TextStyle(
-                      color: teamColor,
-                      fontSize: 9,
-                      fontWeight: FontWeight.bold,
+                  child: Center(
+                    child: Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 0.5,
+                      ),
                     ),
                   ),
                 ),
-                const SizedBox(height: 2),
-                // Status circle
+                const SizedBox(height: 3),
+                // Name label below
                 Container(
-                  width: 30,
-                  height: 30,
+                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
                   decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: teamColor.withValues(alpha: 0.18),
-                    border: Border.all(color: statusColor, width: 2.5),
+                    color: Colors.black.withValues(alpha: 0.7),
+                    borderRadius: BorderRadius.circular(4),
                   ),
-                  child: Center(
-                    child: Container(
-                      width: 9,
-                      height: 9,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: statusColor,
-                      ),
+                  child: Text(
+                    rawName.split(' ').first,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w600,
                     ),
                   ),
                 ),

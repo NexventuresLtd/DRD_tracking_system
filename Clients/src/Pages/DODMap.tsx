@@ -534,37 +534,45 @@ function TopBar({
   onToggleSidebar,
   isConnected,
   onLogout,
+  currentUser,
 }: {
   users: User[];
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   isConnected: boolean;
   onLogout: () => void;
+  currentUser: { username?: string; full_name?: string; email?: string; role?: string } | null;
 }) {
   const active = users.filter(u => u.status === "active").length;
   const stale = users.filter(u => u.status === "stale").length;
   const offline = users.filter(u => u.status === "offline").length;
+  const [showProfile, setShowProfile] = useState(false);
+
+  const displayName = currentUser?.full_name || currentUser?.username || "Commander";
+  const initials = displayName.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "CM";
+  const roleColors: Record<string, string> = {
+    super_admin: "#ef4444", admin: "#f97316", commander: "#8b5cf6",
+    operator: "#3b82f6", field_unit: "#22c55e", viewer: "#94a3b8",
+  };
+  const roleColor = roleColors[currentUser?.role ?? ""] ?? "#3b82f6";
 
   return (
-    <div className="bg-slate-900 border-b border-white/10 flex items-center px-3 md:px-4 h-14 gap-1 flex-shrink-0">
-      <button
-        onClick={onToggleSidebar}
-        className="md:hidden bg-transparent border-none text-slate-400 p-1.5 cursor-pointer mr-1"
-      >
+    <div className="bg-slate-900 border-b border-white/10 flex items-center px-3 md:px-4 h-14 gap-1 flex-shrink-0 relative">
+      <button onClick={onToggleSidebar} className="md:hidden bg-transparent border-none text-slate-400 p-1.5 cursor-pointer mr-1">
         <FiMenu size={18} />
       </button>
 
       <div className="flex items-center gap-2 md:gap-3 mr-2 md:mr-4">
-        <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-primary/20 border border-primary/50 flex items-center justify-center text-primary text-base md:text-lg flex-shrink-0">
+        <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-primary/20 border border-primary/50 flex items-center justify-center text-primary shrink-0">
           <FiShield size={16} />
         </div>
         <div className="hidden sm:block">
-          <div className="text-foreground font-bold text-xs md:text-sm leading-tight">DRD</div>
-          <div className="text-slate-500 text-[9px] md:text-[10px] tracking-wider hidden md:block">Field Coordination</div>
+          <div className="text-foreground font-bold text-xs md:text-sm leading-tight">DRD TRACKING</div>
+          <div className="text-slate-500 text-[9px] tracking-wider hidden md:block">Field Coordination</div>
         </div>
       </div>
 
-      <div className="hidden sm:block w-px h-7 md:h-8 bg-white/10 mx-1 md:mx-2" />
+      <div className="hidden sm:block w-px h-7 bg-white/10 mx-1 md:mx-2" />
 
       <div className="flex items-center gap-0.5 md:gap-1 flex-1 md:flex-none overflow-x-auto">
         <StatChip label="TOTAL" value={String(users.length)} icon={<FiUsers size={12} />} color="#94a3b8" />
@@ -576,24 +584,84 @@ function TopBar({
       <div className="flex-1" />
 
       <div className="flex items-center gap-2 md:gap-3">
-        <div className="flex items-center gap-1.5 text-[10px] md:text-xs" title={isConnected ? "Connected to backend" : "Mock data — backend offline"}>
-          <FiClock size={12} className="text-slate-500" />
-          <span className="hidden sm:inline text-slate-500">LIVE</span>
-          <span
-            className="w-1.5 h-1.5 md:w-2 md:h-2 rounded-full animate-pulse"
-            style={{ backgroundColor: isConnected ? "#22c55e" : "#f59e0b" }}
-          />
+        {/* Live indicator */}
+        <div className="hidden sm:flex items-center gap-1.5 text-[10px]" title={isConnected ? "Connected" : "Mock data"}>
+          <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: isConnected ? "#22c55e" : "#f59e0b" }} />
+          <span className="text-slate-500 font-semibold tracking-wider">{isConnected ? "LIVE" : "DEMO"}</span>
         </div>
+
+        {/* Profile button */}
+        <button
+          onClick={() => setShowProfile(v => !v)}
+          className="flex items-center gap-2 px-2 py-1.5 rounded-lg cursor-pointer transition-all hover:opacity-90"
+          style={{ backgroundColor: `${roleColor}15`, border: `1px solid ${roleColor}35` }}
+          title="View profile"
+        >
+          <div className="w-6 h-6 rounded-full flex items-center justify-center text-[9px] font-bold shrink-0"
+            style={{ backgroundColor: `${roleColor}25`, border: `1.5px solid ${roleColor}60`, color: roleColor }}>
+            {initials}
+          </div>
+          <div className="hidden md:block text-left">
+            <div className="text-white text-[10px] font-semibold leading-none truncate max-w-[90px]">{displayName}</div>
+            <div className="text-[8px] font-bold tracking-wider mt-0.5" style={{ color: roleColor }}>
+              {(currentUser?.role ?? "viewer").toUpperCase().replace("_", " ")}
+            </div>
+          </div>
+        </button>
+
+        {/* Logout */}
         <button
           onClick={onLogout}
-          title="Logout"
-          className="flex items-center gap-1 px-2 py-1 rounded text-[9px] md:text-[10px] font-semibold cursor-pointer transition-all hover:opacity-80"
-          style={{ backgroundColor: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.2)", color: "#ef4444" }}
+          title="Sign out"
+          className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-semibold cursor-pointer transition-all hover:opacity-80"
+          style={{ backgroundColor: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.25)", color: "#ef4444", fontSize: 11 }}
         >
-          <FiLock size={11} />
+          <FiLock size={12} />
           <span className="hidden sm:inline">LOGOUT</span>
         </button>
       </div>
+
+      {/* Profile dropdown */}
+      {showProfile && currentUser && (
+        <>
+          <div className="fixed inset-0 z-[3999]" onClick={() => setShowProfile(false)} />
+          <div className="absolute top-full right-3 mt-2 z-[4000] rounded-xl shadow-2xl overflow-hidden"
+            style={{ width: 260, background: "#0f1c2e", border: "1px solid rgba(255,255,255,0.08)" }}>
+            <div className="p-4 border-b" style={{ borderColor: "rgba(255,255,255,0.06)", background: `${roleColor}08` }}>
+              <div className="flex items-center gap-3">
+                <div className="w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
+                  style={{ backgroundColor: `${roleColor}20`, border: `2px solid ${roleColor}50`, color: roleColor }}>
+                  {initials}
+                </div>
+                <div className="min-w-0">
+                  <div className="text-white font-semibold text-sm truncate">{currentUser.full_name || currentUser.username}</div>
+                  {currentUser.username && currentUser.full_name && (
+                    <div className="text-slate-500 text-[10px] truncate">@{currentUser.username}</div>
+                  )}
+                  <span className="inline-block mt-1 px-1.5 py-0.5 rounded text-[8px] font-bold tracking-wide"
+                    style={{ backgroundColor: `${roleColor}18`, color: roleColor }}>
+                    {(currentUser.role ?? "viewer").toUpperCase().replace("_", " ")}
+                  </span>
+                </div>
+              </div>
+            </div>
+            {currentUser.email && (
+              <div className="px-4 py-2.5 flex items-center gap-2 text-[11px] text-slate-400" style={{ borderBottom: "1px solid rgba(255,255,255,0.05)" }}>
+                <FiUser size={11} className="shrink-0 text-slate-500" />
+                <span className="truncate">{currentUser.email}</span>
+              </div>
+            )}
+            <button
+              onClick={() => { setShowProfile(false); onLogout(); }}
+              className="w-full flex items-center gap-2 px-4 py-3 text-[11px] font-semibold transition-colors hover:opacity-80 cursor-pointer"
+              style={{ color: "#ef4444", background: "rgba(239,68,68,0.06)", border: "none" }}
+            >
+              <FiLock size={12} />
+              Sign out
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -2633,6 +2701,7 @@ export default function DODMap() {
   const [assigningUserId, setAssigningUserId] = useState<string | null>(null);
   const [showAssignPicker, setShowAssignPicker] = useState(false);
   const [currentUserRole, setCurrentUserRole] = useState<any>(null);
+  const [currentUser, setCurrentUser] = useState<{ username?: string; full_name?: string; email?: string; role?: string } | null>(null);
   const [mapFlyTarget, setMapFlyTarget] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedPOIType, setSelectedPOIType] = useState<POIType>("checkpoint");
   const [pendingPOI, setPendingPOI] = useState<POI | null>(null);
@@ -2652,7 +2721,7 @@ export default function DODMap() {
     alerts: false,
     quickActions: false,
     routes: false,
-    comms: true,
+    comms: false,
   });
   if (window.innerWidth >= 128000) {
     setIsFullscreen(false);
@@ -2788,7 +2857,9 @@ export default function DODMap() {
       ]);
 
       if (meRes.status === "fulfilled") {
-        setCurrentUserRole((meRes.value.data as { role?: string })?.role ?? null);
+        const me = meRes.value.data as { role?: string; username?: string; full_name?: string; email?: string };
+        setCurrentUserRole(me?.role ?? null);
+        setCurrentUser(me ?? null);
       }
 
       // Build team + user info maps
@@ -3608,6 +3679,7 @@ export default function DODMap() {
         sidebarOpen={sidebarOpen}
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         isConnected={isConnected}
+        currentUser={currentUser}
         onLogout={() => {
           api.logout().catch(() => { });
           localStorage.removeItem("access_token");

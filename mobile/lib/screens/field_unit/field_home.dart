@@ -140,21 +140,89 @@ class _FieldHomeState extends State<FieldHome> with WidgetsBindingObserver {
         return Scaffold(
           backgroundColor: DRDTheme.backgroundColor,
           appBar: AppBar(
-            title: Text(user?.teamName?.toUpperCase() ?? 'SOLDIER DASHBOARD'),
+            backgroundColor: const Color(0xFF0A1628),
+            elevation: 0,
+            title: Row(
+              children: [
+                Container(
+                  width: 28,
+                  height: 28,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: DRDTheme.primaryColor.withValues(alpha: 0.15),
+                    border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
+                  ),
+                  child: const Icon(Icons.shield_outlined, size: 14, color: DRDTheme.primaryColor),
+                ),
+                const SizedBox(width: 8),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'drd_tracking',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    if (user?.teamName != null)
+                      Text(
+                        user!.teamName!.toUpperCase(),
+                        style: TextStyle(
+                          color: DRDTheme.primaryColor.withValues(alpha: 0.8),
+                          fontSize: 9,
+                          letterSpacing: 1.5,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                  ],
+                ),
+              ],
+            ),
             actions: [
               if (isLocationDisabled)
                 IconButton(
-                  icon: const Icon(Icons.location_off, color: DRDTheme.dangerColor),
+                  icon: const Icon(Icons.location_off, color: DRDTheme.dangerColor, size: 20),
                   onPressed: _checkLocationStatus,
                   tooltip: 'Location disabled - tap to retry',
                 ),
               IconButton(
-                icon: const Icon(Icons.logout),
+                icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 20),
+                tooltip: 'Sign out',
                 onPressed: () async {
+                  // Cache before async gap
                   final nav = Navigator.of(context);
-                  await context.read<LocationProvider>().stopTracking();
-                  await authProvider.logout();
-                  if (mounted) nav.pushReplacementNamed('/login');
+                  final loc = context.read<LocationProvider>();
+                  final confirmed = await showDialog<bool>(
+                    context: context,
+                    builder: (ctx) => AlertDialog(
+                      backgroundColor: const Color(0xFF0F1C2E),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                      title: const Row(
+                        children: [
+                          Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 18),
+                          SizedBox(width: 8),
+                          Text('Sign Out', style: TextStyle(color: Colors.white, fontSize: 15)),
+                        ],
+                      ),
+                      content: Text(
+                        'End your field session and sign out?',
+                        style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
+                      ),
+                      actions: [
+                        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: TextStyle(color: Colors.white.withValues(alpha: 0.4)))),
+                        TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign Out', style: TextStyle(color: Color(0xFFEF4444)))),
+                      ],
+                    ),
+                  );
+                  if (confirmed == true && mounted) {
+                    await loc.stopTracking();
+                    await authProvider.logout();
+                    if (mounted) nav.pushReplacementNamed('/login');
+                  }
                 },
               ),
             ],
