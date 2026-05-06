@@ -1,4 +1,5 @@
 import 'package:flutter/foundation.dart';
+import 'dart:async';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../config/constants.dart';
@@ -6,6 +7,7 @@ import 'storage_service.dart';
 
 class ApiService {
   final StorageService _storage = StorageService();
+  Future<bool>? _refreshFuture;
 
   /// Builds a URI, ensuring the path has a trailing slash before any query
   /// string — this matches FastAPI's default routing conventions and avoids
@@ -139,9 +141,21 @@ class ApiService {
   );
 
   Future<void> _refreshToken() async {
+    // Serialize concurrent refresh attempts so only one network call is made.
+    if (_refreshFuture != null) {
+      await _refreshFuture;
+      return;
+    }
+
+    final completer = Completer<bool>();
+    _refreshFuture = completer.future;
     try {
       final refreshToken = await _storage.getRefreshToken();
-      if (refreshToken == null) return;
+      if (refreshToken == null) {
+        completer.complete(false);
+        return;
+      }
+
       final response = await http.post(
         _uri('/auth/refresh'),
         headers: {'Content-Type': 'application/json'},
@@ -150,10 +164,18 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         await _storage.saveToken(data['access_token']);
-        await _storage.saveRefreshToken(data['refresh_token']);
+        if (data['refresh_token'] != null) {
+          await _storage.saveRefreshToken(data['refresh_token']);
+        }
+        completer.complete(true);
+        return;
       }
+      completer.complete(false);
     } catch (e) {
       debugPrint('Refresh Token Error: $e');
+      completer.complete(false);
+    } finally {
+      _refreshFuture = null;
     }
   }
 }

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -10,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'package:http_parser/http_parser.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
@@ -288,37 +288,113 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     String? messageId,
     String? caption,
   }) async {
+    MediaType _mediaTypeForImage(String path) {
+      final lowerPath = path.toLowerCase();
+      if (lowerPath.endsWith('.png')) {
+        return MediaType('image', 'png');
+      }
+      if (lowerPath.endsWith('.webp')) {
+        return MediaType('image', 'webp');
+      }
+      if (lowerPath.endsWith('.gif')) {
+        return MediaType('image', 'gif');
+      }
+      return MediaType('image', 'jpeg');
+    }
+
+    Future<http.StreamedResponse> sendUpload(String token) async {
+      final uri = Uri.parse('${AppConstants.baseUrl}/evidence/upload');
+      final request = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer $token'
+        ..files.add(
+          await http.MultipartFile.fromPath(
+            'file',
+            image.path,
+            filename: image.name,
+            contentType: _mediaTypeForImage(image.path),
+          ),
+        )
+        ..fields['caption'] = caption ?? '';
+
+      if (poiId != null) request.fields['poi_id'] = poiId;
+      if (messageId != null) request.fields['message_id'] = messageId;
+
+      return request.send().timeout(const Duration(seconds: 45));
+    }
+
+    Future<String?> parseUploadResponse(http.StreamedResponse response) async {
+      final body = await response.stream.bytesToString();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        debugPrint('Evidence upload failed: ${response.statusCode} $body');
+        return null;
+      }
+
+      if (body.isEmpty) {
+        return null;
+      }
+
+      try {
+        final data = jsonDecode(body);
+        if (data is! Map<String, dynamic>) return null;
+
+        final rawUrl = (data['url'] ?? data['file_url'] ?? data['file_path'])
+            ?.toString();
+        if (rawUrl == null || rawUrl.isEmpty) return null;
+
+        final uri = Uri.parse(rawUrl);
+        if (uri.isAbsolute) {
+          return rawUrl;
+        }
+
+        return Uri.parse(
+          AppConstants.baseUrl,
+        ).replace(path: '').resolve(rawUrl).toString();
+      } catch (e) {
+        debugPrint('Evidence upload parse error: $e');
+        return null;
+      }
+    }
+
     try {
       final token = await _storage.getToken();
       if (token == null) return null;
 
-      final uri = Uri.parse('${AppConstants.baseUrl}/evidence/upload');
-      final req = http.MultipartRequest('POST', uri)
-        ..headers['Authorization'] = 'Bearer $token'
-        ..files.add(await http.MultipartFile.fromPath('file', image.path,
-            filename: image.name))
-        ..fields['caption'] = caption ?? '';
-
-      if (poiId != null) req.fields['poi_id'] = poiId;
-      if (messageId != null) req.fields['message_id'] = messageId;
-
-      final streamed = await req.send().timeout(const Duration(seconds: 30));
-      final body = await streamed.stream.bytesToString();
-      if (streamed.statusCode == 200) {
-        final data = jsonDecode(body) as Map<String, dynamic>;
-        final path = data['url'] as String?;
-        if (path == null) return null;
-        // Build absolute URL from base URL (strip /api/v1)
-        final base = AppConstants.baseUrl.replaceAll('/api/v1', '');
-        return '$base$path';
+      var response = await sendUpload(token);
+      if (response.statusCode == 401) {
+        final refreshToken = await _storage.getRefreshToken();
+        if (refreshToken != null) {
+          final refreshResponse = await http.post(
+            Uri.parse('${AppConstants.baseUrl}/auth/refresh'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'refresh_token': refreshToken}),
+          );
+          if (refreshResponse.statusCode == 200) {
+            final refreshData =
+                jsonDecode(refreshResponse.body) as Map<String, dynamic>;
+            final newToken = refreshData['access_token'] as String?;
+            final newRefreshToken = refreshData['refresh_token'] as String?;
+            if (newToken != null && newToken.isNotEmpty) {
+              await _storage.saveToken(newToken);
+              if (newRefreshToken != null && newRefreshToken.isNotEmpty) {
+                await _storage.saveRefreshToken(newRefreshToken);
+              }
+              response = await sendUpload(newToken);
+            }
+          }
+        }
       }
+
+      return await parseUploadResponse(response);
     } catch (e) {
       debugPrint('Evidence upload error: $e');
     }
     return null;
   }
 
-  Future<void> _showEvidenceCaptureDialog(String poiId, String markLabel) async {
+  Future<void> _showEvidenceCaptureDialog(
+    String poiId,
+    String markLabel,
+  ) async {
     if (!mounted) return;
     final pick = await showModalBottomSheet<ImageSource?>(
       context: context,
@@ -332,36 +408,70 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 36, height: 4,
+              width: 36,
+              height: 4,
               margin: const EdgeInsets.only(bottom: 18),
-              decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
             const Row(
               children: [
-                Icon(Icons.camera_alt_outlined, color: DRDTheme.primaryColor, size: 18),
+                Icon(
+                  Icons.camera_alt_outlined,
+                  color: DRDTheme.primaryColor,
+                  size: 18,
+                ),
                 SizedBox(width: 8),
-                Text('Add Evidence Photo?', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+                Text(
+                  'Add Evidence Photo?',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    fontFamily: 'Poppins',
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 6),
-            Text('Attach a photo to this mark as evidence for the command center.',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12, fontFamily: 'Poppins')),
+            Text(
+              'Attach a photo to this mark as evidence for the command center.',
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.5),
+                fontSize: 12,
+                fontFamily: 'Poppins',
+              ),
+            ),
             const SizedBox(height: 20),
             Row(
               children: [
                 Expanded(
-                  child: _evidencePickerBtn(Icons.camera_alt, 'Take Photo', DRDTheme.primaryColor,
-                    () => Navigator.pop(ctx, ImageSource.camera)),
+                  child: _evidencePickerBtn(
+                    Icons.camera_alt,
+                    'Take Photo',
+                    DRDTheme.primaryColor,
+                    () => Navigator.pop(ctx, ImageSource.camera),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _evidencePickerBtn(Icons.photo_library_outlined, 'Gallery', DRDTheme.accentColor,
-                    () => Navigator.pop(ctx, ImageSource.gallery)),
+                  child: _evidencePickerBtn(
+                    Icons.photo_library_outlined,
+                    'Gallery',
+                    DRDTheme.accentColor,
+                    () => Navigator.pop(ctx, ImageSource.gallery),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
-                  child: _evidencePickerBtn(Icons.close, 'Skip', Colors.white38,
-                    () => Navigator.pop(ctx, null)),
+                  child: _evidencePickerBtn(
+                    Icons.close,
+                    'Skip',
+                    Colors.white38,
+                    () => Navigator.pop(ctx, null),
+                  ),
                 ),
               ],
             ),
@@ -372,17 +482,30 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
     if (pick == null || !mounted) return;
 
-    final status = await (pick == ImageSource.camera ? Permission.camera : Permission.photos).status;
+    final status =
+        await (pick == ImageSource.camera
+                ? Permission.camera
+                : Permission.photos)
+            .status;
     if (status.isDenied) {
-      await (pick == ImageSource.camera ? Permission.camera : Permission.photos).request();
+      await (pick == ImageSource.camera ? Permission.camera : Permission.photos)
+          .request();
     }
 
     final picker = ImagePicker();
-    final image = await picker.pickImage(source: pick, imageQuality: 75, maxWidth: 1280);
+    final image = await picker.pickImage(
+      source: pick,
+      imageQuality: 75,
+      maxWidth: 1280,
+    );
     if (image == null || !mounted) return;
 
     _showSnack('Uploading evidence…', color: DRDTheme.primaryColor);
-    final url = await _uploadImageAsEvidence(image: image, poiId: poiId, caption: markLabel);
+    final url = await _uploadImageAsEvidence(
+      image: image,
+      poiId: poiId,
+      caption: markLabel,
+    );
 
     if (!mounted) return;
     if (url != null) {
@@ -392,7 +515,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     }
   }
 
-  Widget _evidencePickerBtn(IconData icon, String label, Color color, VoidCallback onTap) {
+  Widget _evidencePickerBtn(
+    IconData icon,
+    String label,
+    Color color,
+    VoidCallback onTap,
+  ) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -406,7 +534,15 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           children: [
             Icon(icon, color: color, size: 22),
             const SizedBox(height: 4),
-            Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700, fontFamily: 'Poppins')),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                fontFamily: 'Poppins',
+              ),
+            ),
           ],
         ),
       ),
@@ -421,36 +557,50 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       context: context,
       backgroundColor: const Color(0xFF0F1C2E),
       shape: const RoundedRectangleBorder(
-          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (ctx) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Container(
-              width: 36, height: 4,
+              width: 36,
+              height: 4,
               margin: const EdgeInsets.only(bottom: 18),
               decoration: BoxDecoration(
-                  color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(2),
+              ),
             ),
-            const Text('Send Image',
-                style: TextStyle(
-                    color: Colors.white, fontSize: 15,
-                    fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+            const Text(
+              'Send Image',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                fontFamily: 'Poppins',
+              ),
+            ),
             const SizedBox(height: 20),
             Row(
               children: [
                 Expanded(
-                  child: _evidencePickerBtn(Icons.camera_alt, 'Camera',
-                      DRDTheme.primaryColor,
-                      () => Navigator.pop(ctx, ImageSource.camera)),
+                  child: _evidencePickerBtn(
+                    Icons.camera_alt,
+                    'Camera',
+                    DRDTheme.primaryColor,
+                    () => Navigator.pop(ctx, ImageSource.camera),
+                  ),
                 ),
                 const SizedBox(width: 10),
                 Expanded(
                   child: _evidencePickerBtn(
-                      Icons.photo_library_outlined, 'Gallery',
-                      DRDTheme.accentColor,
-                      () => Navigator.pop(ctx, ImageSource.gallery)),
+                    Icons.photo_library_outlined,
+                    'Gallery',
+                    DRDTheme.accentColor,
+                    () => Navigator.pop(ctx, ImageSource.gallery),
+                  ),
                 ),
               ],
             ),
@@ -462,13 +612,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     if (source == null || !mounted) return;
 
     // Request permission after user chose source
-    final perm = source == ImageSource.camera ? Permission.camera : Permission.photos;
+    final perm = source == ImageSource.camera
+        ? Permission.camera
+        : Permission.photos;
     if (await perm.isDenied) await perm.request();
     if (!mounted) return;
 
     final picker = ImagePicker();
     final image = await picker.pickImage(
-        source: source, imageQuality: 70, maxWidth: 1024);
+      source: source,
+      imageQuality: 70,
+      maxWidth: 1024,
+    );
     if (image == null || !mounted) return;
 
     setState(() => _sending = true);
@@ -1420,7 +1575,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 const SizedBox(height: 3),
                 // Name label
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 5,
+                    vertical: 2,
+                  ),
                   decoration: BoxDecoration(
                     color: Colors.black.withValues(alpha: 0.72),
                     borderRadius: BorderRadius.circular(4),
@@ -1626,20 +1784,28 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   /// Fetches a real road-following polyline from the OSRM public API.
   /// Falls back to straight-line waypoints if the request fails.
-  Future<List<LatLng>> _fetchOsrmRoute(List<Map<String, dynamic>> waypoints) async {
+  Future<List<LatLng>> _fetchOsrmRoute(
+    List<Map<String, dynamic>> waypoints,
+  ) async {
     if (waypoints.length < 2) {
-      return waypoints.map((wp) => LatLng(
-        (wp['latitude'] as num).toDouble(),
-        (wp['longitude'] as num).toDouble(),
-      )).toList();
+      return waypoints
+          .map(
+            (wp) => LatLng(
+              (wp['latitude'] as num).toDouble(),
+              (wp['longitude'] as num).toDouble(),
+            ),
+          )
+          .toList();
     }
 
     // OSRM expects coordinates as "lng,lat;lng,lat;..."
-    final coords = waypoints.map((wp) {
-      final lat = (wp['latitude'] as num).toDouble();
-      final lng = (wp['longitude'] as num).toDouble();
-      return '$lng,$lat';
-    }).join(';');
+    final coords = waypoints
+        .map((wp) {
+          final lat = (wp['latitude'] as num).toDouble();
+          final lng = (wp['longitude'] as num).toDouble();
+          return '$lng,$lat';
+        })
+        .join(';');
 
     try {
       final uri = Uri.parse(
@@ -1668,10 +1834,14 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     }
 
     // Fallback: straight lines between waypoints
-    return waypoints.map((wp) => LatLng(
-      (wp['latitude'] as num).toDouble(),
-      (wp['longitude'] as num).toDouble(),
-    )).toList();
+    return waypoints
+        .map(
+          (wp) => LatLng(
+            (wp['latitude'] as num).toDouble(),
+            (wp['longitude'] as num).toDouble(),
+          ),
+        )
+        .toList();
   }
 
   Future<void> _startFollowRoute(Map<String, dynamic> route) async {
@@ -2308,14 +2478,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 ],
                 const SizedBox(height: 6),
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
                   decoration: BoxDecoration(
                     color: DRDTheme.primaryColor.withValues(alpha: 0.15),
                     borderRadius: BorderRadius.circular(20),
-                    border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
+                    border: Border.all(
+                      color: DRDTheme.primaryColor.withValues(alpha: 0.4),
+                    ),
                   ),
                   child: Text(
-                    (user?.role ?? 'FIELD UNIT').toUpperCase().replaceAll('_', ' '),
+                    (user?.role ?? 'FIELD UNIT').toUpperCase().replaceAll(
+                      '_',
+                      ' ',
+                    ),
                     style: const TextStyle(
                       color: DRDTheme.primaryColor,
                       fontSize: 10,
@@ -2346,7 +2524,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     label: const Text('SIGN OUT'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: DRDTheme.dangerColor,
-                      side: BorderSide(color: DRDTheme.dangerColor.withValues(alpha: 0.5)),
+                      side: BorderSide(
+                        color: DRDTheme.dangerColor.withValues(alpha: 0.5),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
@@ -2488,16 +2668,34 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           children: [
             Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 18),
             SizedBox(width: 8),
-            Text('Sign Out', style: TextStyle(color: Colors.white, fontSize: 15)),
+            Text(
+              'Sign Out',
+              style: TextStyle(color: Colors.white, fontSize: 15),
+            ),
           ],
         ),
         content: Text(
           'End your field session and sign out?',
-          style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.6),
+            fontSize: 13,
+          ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text('Cancel', style: TextStyle(color: Colors.white.withValues(alpha: 0.4)))),
-          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Sign Out', style: TextStyle(color: Color(0xFFEF4444)))),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              'Cancel',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.4)),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text(
+              'Sign Out',
+              style: TextStyle(color: Color(0xFFEF4444)),
+            ),
+          ),
         ],
       ),
     );
@@ -2527,10 +2725,15 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             decoration: BoxDecoration(
               color: solid ? color : color.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: solid ? color : color.withValues(alpha: 0.4), width: 1),
+              border: Border.all(
+                color: solid ? color : color.withValues(alpha: 0.4),
+                width: 1,
+              ),
               boxShadow: [
                 BoxShadow(
-                  color: solid ? color.withValues(alpha: 0.35) : Colors.black.withValues(alpha: 0.3),
+                  color: solid
+                      ? color.withValues(alpha: 0.35)
+                      : Colors.black.withValues(alpha: 0.3),
                   blurRadius: solid ? 8 : 4,
                 ),
               ],
@@ -2705,7 +2908,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Row(
               children: [
-                const Icon(Icons.chat_bubble_outline, size: 13, color: DRDTheme.primaryColor),
+                const Icon(
+                  Icons.chat_bubble_outline,
+                  size: 13,
+                  color: DRDTheme.primaryColor,
+                ),
                 const SizedBox(width: 8),
                 const Text(
                   'COMMS',
@@ -2719,16 +2926,29 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 if (unread > 0) ...[
                   const SizedBox(width: 6),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 1,
+                    ),
                     decoration: BoxDecoration(
                       color: DRDTheme.dangerColor,
                       borderRadius: BorderRadius.circular(8),
                     ),
-                    child: Text('$unread', style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      '$unread',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 9,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ),
                 ],
                 const Spacer(),
-                Text('${_messages.length} msgs', style: const TextStyle(color: Colors.white24, fontSize: 10)),
+                Text(
+                  '${_messages.length} msgs',
+                  style: const TextStyle(color: Colors.white24, fontSize: 10),
+                ),
                 const SizedBox(width: 10),
                 GestureDetector(
                   onTap: () => setState(() => _panelOpen = false),
@@ -2738,7 +2958,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                       color: Colors.white.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(6),
                     ),
-                    child: const Icon(Icons.close, color: Colors.white54, size: 16),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white54,
+                      size: 16,
+                    ),
                   ),
                 ),
               ],
@@ -2775,7 +2999,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               child: Center(
                 child: CircularProgressIndicator(
                   value: progress.expectedTotalBytes != null
-                      ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                      ? progress.cumulativeBytesLoaded /
+                            progress.expectedTotalBytes!
                       : null,
                   color: DRDTheme.primaryColor,
                   strokeWidth: 2,
@@ -2794,9 +3019,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             child: const Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Icon(Icons.broken_image_outlined, color: Colors.white38, size: 28),
+                Icon(
+                  Icons.broken_image_outlined,
+                  color: Colors.white38,
+                  size: 28,
+                ),
                 SizedBox(height: 4),
-                Text('Image unavailable', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                Text(
+                  'Image unavailable',
+                  style: TextStyle(color: Colors.white38, fontSize: 10),
+                ),
               ],
             ),
           ),
@@ -2821,13 +3053,15 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     fit: BoxFit.contain,
                     errorBuilder: (_, err, stack) => const Icon(
                       Icons.broken_image_outlined,
-                      color: Colors.white38, size: 48,
+                      color: Colors.white38,
+                      size: 48,
                     ),
                   ),
                 ),
               ),
               Positioned(
-                top: 48, right: 16,
+                top: 48,
+                right: 16,
                 child: GestureDetector(
                   onTap: () => Navigator.pop(ctx),
                   child: Container(
@@ -2836,7 +3070,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                       color: Colors.black54,
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 20,
+                    ),
                   ),
                 ),
               ),
@@ -2923,12 +3161,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                               padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
                               decoration: BoxDecoration(
                                 color: fromMe
-                                    ? DRDTheme.primaryColor.withValues(alpha: 0.25)
-                                    : DRDTheme.backgroundColor.withValues(alpha: 0.7),
+                                    ? DRDTheme.primaryColor.withValues(
+                                        alpha: 0.25,
+                                      )
+                                    : DRDTheme.backgroundColor.withValues(
+                                        alpha: 0.7,
+                                      ),
                                 borderRadius: BorderRadius.circular(10),
                                 border: Border.all(
                                   color: fromMe
-                                      ? DRDTheme.primaryColor.withValues(alpha: 0.4)
+                                      ? DRDTheme.primaryColor.withValues(
+                                          alpha: 0.4,
+                                        )
                                       : Colors.white.withValues(alpha: 0.08),
                                 ),
                               ),
@@ -2941,7 +3185,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                                     Text(
                                       sender,
                                       style: TextStyle(
-                                        color: DRDTheme.primaryColor.withValues(alpha: 0.9),
+                                        color: DRDTheme.primaryColor.withValues(
+                                          alpha: 0.9,
+                                        ),
                                         fontSize: 9,
                                         fontWeight: FontWeight.bold,
                                       ),
@@ -2949,15 +3195,20 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                                   if (!fromMe) const SizedBox(height: 2),
                                   // Image message
                                   if (content.startsWith('[evidence_image]'))
-                                    _buildImageMessage(content.replaceFirst('[evidence_image]', ''))
+                                    _buildImageMessage(
+                                      content.replaceFirst(
+                                        '[evidence_image]',
+                                        '',
+                                      ),
+                                    )
                                   else
-                                  Text(
-                                    content,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontSize: 12,
+                                    Text(
+                                      content,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                      ),
                                     ),
-                                  ),
                                   if (priority != 'normal') ...[
                                     const SizedBox(height: 3),
                                     Text(
@@ -2984,89 +3235,100 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         SafeArea(
           top: false,
           child: Container(
-          padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-          decoration: BoxDecoration(
-            border: Border(
-              top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+            padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
+            decoration: BoxDecoration(
+              border: Border(
+                top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
+              ),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _msgCtrl,
+                    style: const TextStyle(color: Colors.white, fontSize: 12),
+                    decoration: InputDecoration(
+                      hintText: 'Message unit / command…',
+                      hintStyle: const TextStyle(
+                        color: Colors.white30,
+                        fontSize: 12,
+                      ),
+                      filled: true,
+                      fillColor: DRDTheme.backgroundColor.withValues(
+                        alpha: 0.5,
+                      ),
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 8,
+                      ),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: Colors.white.withValues(alpha: 0.1),
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                          color: DRDTheme.primaryColor,
+                        ),
+                      ),
+                    ),
+                    onSubmitted: (v) => _sendMessage(v),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Camera button
+                GestureDetector(
+                  onTap: _sending ? null : _pickAndSendChatImage,
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: DRDTheme.primaryColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: DRDTheme.primaryColor.withValues(alpha: 0.4),
+                      ),
+                    ),
+                    child: const Icon(
+                      Icons.camera_alt_outlined,
+                      color: DRDTheme.primaryColor,
+                      size: 18,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                // Send button
+                GestureDetector(
+                  onTap: () => _sendMessage(_msgCtrl.text),
+                  child: Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: _sending ? Colors.white10 : DRDTheme.primaryColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: _sending
+                        ? const Padding(
+                            padding: EdgeInsets.all(11),
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.send, color: Colors.white, size: 18),
+                  ),
+                ),
+              ],
             ),
           ),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _msgCtrl,
-                  style: const TextStyle(color: Colors.white, fontSize: 12),
-                  decoration: InputDecoration(
-                    hintText: 'Message unit / command…',
-                    hintStyle: const TextStyle(
-                      color: Colors.white30,
-                      fontSize: 12,
-                    ),
-                    filled: true,
-                    fillColor: DRDTheme.backgroundColor.withValues(alpha: 0.5),
-                    contentPadding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 8,
-                    ),
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    enabledBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide(
-                        color: Colors.white.withValues(alpha: 0.1),
-                      ),
-                    ),
-                    focusedBorder: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: const BorderSide(
-                        color: DRDTheme.primaryColor,
-                      ),
-                    ),
-                  ),
-                  onSubmitted: (v) => _sendMessage(v),
-                ),
-              ),
-              const SizedBox(width: 6),
-              // Camera button
-              GestureDetector(
-                onTap: _sending ? null : _pickAndSendChatImage,
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: DRDTheme.primaryColor.withValues(alpha: 0.15),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
-                  ),
-                  child: const Icon(Icons.camera_alt_outlined, color: DRDTheme.primaryColor, size: 18),
-                ),
-              ),
-              const SizedBox(width: 6),
-              // Send button
-              GestureDetector(
-                onTap: () => _sendMessage(_msgCtrl.text),
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: _sending ? Colors.white10 : DRDTheme.primaryColor,
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: _sending
-                      ? const Padding(
-                          padding: EdgeInsets.all(11),
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                        )
-                      : const Icon(Icons.send, color: Colors.white, size: 18),
-                ),
-              ),
-            ],
-          ),
-        ),
         ), // SafeArea
       ],
     );

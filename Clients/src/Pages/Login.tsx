@@ -4,10 +4,11 @@ import { motion, AnimatePresence } from "framer-motion";
 import {
   FiShield, FiUser, FiLock, FiEye, FiEyeOff,
   FiAlertTriangle, FiZap, FiRadio, FiWifi, FiNavigation,
+  FiChevronRight, FiArrowRight
 } from "react-icons/fi";
 import * as api from "../services/api";
 
-const GPS_IMAGE = "https://livetracking.pk/wp-content/uploads/2026/03/real-time-gps-location-tracking-pakistan.jpeg";
+const GPS_IMAGE = "https://images.unsplash.com/photo-1614064641938-3bbee52942c7?w=1200&q=80";
 
 function getErrorMessage(raw: string): string {
   const lower = raw.toLowerCase();
@@ -56,86 +57,133 @@ export default function Login() {
   };
 
   return (
-    <div className="w-screen h-screen flex overflow-hidden" style={{ fontFamily: "'Poppins', sans-serif", background: "#050C1A" }}>
-
+    <div className="min-h-screen flex bg-slate-950">
       {/* ── LEFT PANEL — GPS tracking image ───────────────────────── */}
       <motion.div
-        className="hidden lg:flex flex-col relative overflow-hidden"
-        style={{ width: "52%" }}
-        initial={{ opacity: 0, x: -20 }}
-        animate={{ opacity: 1, x: 0 }}
+        className="hidden lg:flex lg:w-[52%] relative overflow-hidden"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
         transition={{ duration: 0.7, ease: "easeOut" }}
       >
         {/* Background image */}
-        <img
-          src={GPS_IMAGE}
-          alt="GPS tracking"
-          className="absolute inset-0 w-full h-full object-cover"
-          style={{ filter: "brightness(0.55) saturate(1.1)" }}
-        />
+        <div className="absolute inset-0">
+          <img
+            src={GPS_IMAGE}
+            alt="GPS tracking"
+            className="w-full h-full object-cover scale-105"
+            style={{ filter: "brightness(0.5) saturate(1.2)" }}
+          />
+        </div>
 
         {/* Overlay gradient */}
-        <div className="absolute inset-0" style={{ background: "linear-gradient(135deg, rgba(5,12,26,0.75) 0%, rgba(10,22,40,0.5) 50%, rgba(5,12,26,0.8) 100%)" }} />
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-950/80 via-slate-900/50 to-slate-950/85" />
 
-        {/* Scan line effect */}
+        {/* Subtle grid pattern overlay */}
+        <div
+          className="absolute inset-0 opacity-[0.03]"
+          style={{
+            backgroundImage: `linear-gradient(rgba(59, 130, 246, 0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(59, 130, 246, 0.3) 1px, transparent 1px)`,
+            backgroundSize: '60px 60px'
+          }}
+        />
+
+        {/* Animated scan line */}
         <motion.div
-          className="absolute left-0 right-0 h-px"
-          style={{ background: "linear-gradient(90deg, transparent, rgba(59,130,246,0.6), transparent)" }}
+          className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"
           animate={{ top: ["0%", "100%"] }}
-          transition={{ duration: 6, repeat: Infinity, ease: "linear" }}
+          transition={{
+            duration: 8,
+            repeat: Infinity,
+            ease: "linear",
+            repeatDelay: 2
+          }}
         />
 
         {/* Content overlay */}
-        <div className="relative z-10 flex flex-col h-full p-10">
+        <div className="relative z-10 flex flex-col h-full p-12 xl:p-16">
           {/* Top branding */}
           <motion.div
-            className="flex items-center gap-3"
-            initial={{ opacity: 0, y: -10 }}
+            className="flex items-center gap-4"
+            initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3 }}
+            transition={{ delay: 0.3, duration: 0.5 }}
           >
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)" }}>
-              <FiShield size={20} color="#3b82f6" />
+            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center backdrop-blur-sm">
+              <FiShield size={22} className="text-blue-400" />
             </div>
             <div>
-              <div className="text-white font-bold text-base tracking-widest">DRD TRACKING</div>
-              <div className="text-[9px] tracking-widest" style={{ color: "rgba(255,255,255,0.4)" }}>FIELD COORDINATION</div>
+              <div className="text-white font-bold text-lg tracking-[0.2em]">DRD TRACKING</div>
+              <div className="text-[10px] tracking-[0.3em] text-white/30 mt-1">FIELD COORDINATION</div>
             </div>
           </motion.div>
 
           {/* Center tagline */}
           <motion.div
             className="flex-1 flex flex-col justify-center"
-            initial={{ opacity: 0, y: 20 }}
+            initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.5, duration: 0.7 }}
           >
-            <div className="text-4xl font-bold text-white leading-tight mb-4">
-              Real-Time<br />
-              <span style={{ color: "#3b82f6" }}>Field Ops</span><br />
-              Command
-            </div>
-            <p className="text-sm leading-relaxed" style={{ color: "rgba(255,255,255,0.5)", maxWidth: 300 }}>
+            <h2 className="text-5xl xl:text-6xl font-bold text-white leading-[1.1] mb-6">
+              Real-Time Tracking
+              <br />
+              <span className="text-blue-400 text-4xl xl:text-5xl">Military Field Ops</span>
+              <br />
+              <span className="text-3xl xl:text-4xl">
+                Command
+              </span>
+            </h2>
+            <p className="text-base xl:text-lg leading-relaxed text-white/40 max-w-md">
               Live GPS tracking, tactical route planning, and secure team communications for deployed units.
             </p>
+
+            {/* Feature badges */}
+            <div className="flex flex-wrap gap-3 mt-8">
+              {['Live Tracking', 'Secure Comms', 'Route Planning'].map((feature, i) => (
+                <motion.span
+                  key={i}
+                  className="px-4 py-2 rounded-full text-xs font-medium bg-white/5 border border-white/10 text-white/60 backdrop-blur-sm"
+                  initial={{ opacity: 0, scale: 0.9 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ delay: 0.7 + i * 0.1 }}
+                >
+                  {feature}
+                </motion.span>
+              ))}
+            </div>
           </motion.div>
 
           {/* Bottom status row */}
           <motion.div
-            className="flex gap-5"
+            className="flex gap-8"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             transition={{ delay: 0.8 }}
           >
             {[
-              { icon: <FiWifi size={12} />, label: "SECURE TLS", ok: true },
-              { icon: <FiRadio size={12} />, label: "COMMAND LINK", ok: true },
-              { icon: <FiNavigation size={12} />, label: "GPS ACTIVE", ok: true },
+              { icon: <FiWifi size={14} />, label: "SECURE TLS", ok: true },
+              { icon: <FiRadio size={14} />, label: "COMMAND LINK", ok: true },
+              { icon: <FiNavigation size={14} />, label: "GPS ACTIVE", ok: true },
             ].map((s, i) => (
-              <motion.div key={i} className="flex items-center gap-2" initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.9 + i * 0.1 }}>
-                <span style={{ color: "#22c55e" }}>{s.icon}</span>
-                <span className="text-[9px] font-semibold tracking-widest" style={{ color: "rgba(255,255,255,0.35)" }}>{s.label}</span>
-                <motion.span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: "#22c55e" }} animate={{ opacity: [1, 0.2, 1] }} transition={{ duration: 2, delay: i * 0.5, repeat: Infinity }} />
+              <motion.div
+                key={i}
+                className="flex items-center gap-3"
+                initial={{ opacity: 0, x: -10 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.9 + i * 0.1 }}
+              >
+                <span className="text-emerald-400">{s.icon}</span>
+                <span className="text-[10px] font-semibold tracking-[0.2em] text-white/25">{s.label}</span>
+                <motion.span
+                  className="w-2 h-2 rounded-full bg-emerald-400"
+                  animate={{ opacity: [1, 0.2, 1] }}
+                  transition={{
+                    duration: 2,
+                    delay: i * 0.5,
+                    repeat: Infinity,
+                    ease: "easeInOut"
+                  }}
+                />
               </motion.div>
             ))}
           </motion.div>
@@ -144,168 +192,167 @@ export default function Login() {
 
       {/* ── RIGHT PANEL — Form ────────────────────────────────────── */}
       <motion.div
-        className="flex-1 flex flex-col items-center justify-center relative overflow-y-auto"
-        style={{ background: "#060E1C" }}
+        className="flex-1 flex items-center justify-center p-6 sm:p-8 lg:p-12 xl:p-16"
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.5 }}
       >
-        {/* Top accent */}
-        <div className="absolute top-0 left-0 right-0 h-px" style={{ background: "linear-gradient(90deg, transparent, rgba(59,130,246,0.4), transparent)" }} />
+        {/* Top accent line */}
+        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-blue-500/20 to-transparent lg:hidden" />
 
         <motion.div
-          className="w-full px-8 py-10"
-          style={{ maxWidth: 480 }}
+          className="w-full max-w-[540px]"
           initial={{ opacity: 0, y: 24 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.2, duration: 0.6, ease: "easeOut" }}
         >
           {/* Mobile logo */}
-          <div className="flex flex-col items-center mb-8 lg:hidden">
-            <div className="w-16 h-16 rounded-2xl flex items-center justify-center mb-4" style={{ background: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.3)" }}>
-              <FiShield size={30} color="#3b82f6" />
-            </div>
-            <div className="text-white font-bold text-xl tracking-widest">DRD TRACKING</div>
-            <div className="text-[9px] tracking-widest mt-1" style={{ color: "rgba(255,255,255,0.3)" }}>FIELD COORDINATION SYSTEM</div>
+          <div className="flex flex-col items-center mb-10 lg:hidden">
+            <motion.div
+              className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center mb-5"
+              whileHover={{ scale: 1.05 }}
+            >
+              <FiShield size={30} className="text-blue-400" />
+            </motion.div>
+            <div className="text-white font-bold text-2xl tracking-[0.2em]">DRD TRACKING</div>
+            <div className="text-[10px] tracking-[0.3em] text-white/25 mt-2">FIELD COORDINATION SYSTEM</div>
           </div>
 
           {/* Heading */}
           <div className="mb-8">
-            <h1 className="text-white text-3xl font-bold mb-1">Welcome Back</h1>
-            <p className="text-sm" style={{ color: "rgba(255,255,255,0.35)" }}>Sign in to your tactical account</p>
+            <h1 className="text-white text-[32px] sm:text-4xl font-bold mb-3 leading-tight">Welcome Back</h1>
+            <p className="text-sm sm:text-base text-white/35">Sign in to your tactical account</p>
           </div>
 
           {/* Card */}
-          <div className="rounded-2xl p-8" style={{ background: "rgba(15,28,46,0.95)", border: "1px solid rgba(255,255,255,0.06)", boxShadow: "0 30px 70px rgba(0,0,0,0.5)" }}>
-
-            {/* Error banner */}
-            <AnimatePresence>
-              {error && (
-                <motion.div
-                  className="mb-6 flex items-start gap-3 rounded-xl px-4 py-3.5"
-                  style={{ background: "rgba(239,68,68,0.07)", border: "1px solid rgba(239,68,68,0.2)" }}
-                  initial={{ opacity: 0, y: -8, height: 0 }}
-                  animate={{ opacity: 1, y: 0, height: "auto" }}
-                  exit={{ opacity: 0, y: -8, height: 0 }}
-                  transition={{ duration: 0.25 }}
-                >
-                  <FiAlertTriangle size={15} color="#ef4444" className="mt-0.5 shrink-0" />
-                  <span className="text-sm leading-relaxed" style={{ color: "#f87171" }}>{error}</span>
-                </motion.div>
-              )}
-            </AnimatePresence>
-
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {/* Identifier */}
-              <div>
-                <label className="block mb-2.5 text-[10px] font-bold tracking-widest" style={{ color: idFocused ? "#3b82f6" : "rgba(255,255,255,0.35)" }}>
-                  OPERATOR ID / USERNAME
-                </label>
-                <motion.div
-                  className="relative rounded-xl overflow-hidden"
-                  animate={{ boxShadow: idFocused ? "0 0 0 2px rgba(59,130,246,0.45)" : "0 0 0 1px rgba(255,255,255,0.08)" }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <FiUser size={16} color={idFocused ? "#3b82f6" : "rgba(255,255,255,0.2)"} />
-                  </span>
-                  <input
-                    type="text"
-                    value={identifier}
-                    onChange={e => setIdentifier(e.target.value)}
-                    onFocus={() => setIdFocused(true)}
-                    onBlur={() => setIdFocused(false)}
-                    required
-                    autoComplete="username"
-                    placeholder="commander.alpha or user@drd.mil"
-                    style={{
-                      width: "100%", paddingLeft: 44, paddingRight: 16, paddingTop: 14, paddingBottom: 14,
-                      background: idFocused ? "rgba(59,130,246,0.06)" : "rgba(10,22,40,0.9)",
-                      color: "white", fontSize: 13, outline: "none", border: "none",
-                    }}
-                  />
-                </motion.div>
-              </div>
-
-              {/* Password */}
-              <div>
-                <label className="block mb-2.5 text-[10px] font-bold tracking-widest" style={{ color: pwFocused ? "#3b82f6" : "rgba(255,255,255,0.35)" }}>
-                  ACCESS CODE
-                </label>
-                <motion.div
-                  className="relative rounded-xl overflow-hidden"
-                  animate={{ boxShadow: pwFocused ? "0 0 0 2px rgba(59,130,246,0.45)" : "0 0 0 1px rgba(255,255,255,0.08)" }}
-                  transition={{ duration: 0.2 }}
-                >
-                  <span className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                    <FiLock size={16} color={pwFocused ? "#3b82f6" : "rgba(255,255,255,0.2)"} />
-                  </span>
-                  <input
-                    type={showPass ? "text" : "password"}
-                    value={password}
-                    onChange={e => setPassword(e.target.value)}
-                    onFocus={() => setPwFocused(true)}
-                    onBlur={() => setPwFocused(false)}
-                    required
-                    autoComplete="current-password"
-                    placeholder="••••••••••"
-                    style={{
-                      width: "100%", paddingLeft: 44, paddingRight: 48, paddingTop: 14, paddingBottom: 14,
-                      background: pwFocused ? "rgba(59,130,246,0.06)" : "rgba(10,22,40,0.9)",
-                      color: "white", fontSize: 13, outline: "none", border: "none",
-                    }}
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPass(v => !v)}
-                    tabIndex={-1}
-                    style={{ position: "absolute", right: 14, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "rgba(255,255,255,0.3)" }}
+          <div className="rounded-3xl p-[1px] bg-gradient-to-b from-white/10 to-transparent">
+            <div className="rounded-3xl bg-slate-900/95 backdrop-blur-xl p-8 sm:p-10">
+              {/* Error banner */}
+              <AnimatePresence>
+                {error && (
+                  <motion.div
+                    className="mb-6 flex items-start gap-3 rounded-2xl px-5 py-4 bg-red-500/5 border border-red-500/20"
+                    initial={{ opacity: 0, y: -10, height: 0 }}
+                    animate={{ opacity: 1, y: 0, height: "auto" }}
+                    exit={{ opacity: 0, y: -10, height: 0 }}
+                    transition={{ duration: 0.3 }}
                   >
-                    {showPass ? <FiEyeOff size={15} /> : <FiEye size={15} />}
-                  </button>
-                </motion.div>
-              </div>
-
-              {/* Submit */}
-              <motion.button
-                type="submit"
-                disabled={loading || !identifier || !password}
-                className="w-full flex items-center justify-center gap-2.5 rounded-xl text-white font-bold tracking-widest relative overflow-hidden"
-                style={{
-                  padding: "15px 24px",
-                  fontSize: 13,
-                  background: loading || !identifier || !password ? "rgba(59,130,246,0.4)" : "#2563eb",
-                  border: "none",
-                  cursor: loading || !identifier || !password ? "not-allowed" : "pointer",
-                }}
-                whileTap={{ scale: loading ? 1 : 0.985 }}
-                transition={{ duration: 0.1 }}
-              >
-                {loading ? (
-                  <>
-                    <motion.span
-                      className="w-4 h-4 rounded-full border-2 shrink-0"
-                      style={{ borderColor: "rgba(255,255,255,0.3)", borderTopColor: "white" }}
-                      animate={{ rotate: 360 }}
-                      transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-                    />
-                    AUTHENTICATING...
-                  </>
-                ) : (
-                  <>
-                    <FiZap size={14} />
-                    AUTHENTICATE
-                  </>
+                    <FiAlertTriangle size={16} className="text-red-400 mt-0.5 shrink-0" />
+                    <span className="text-sm leading-relaxed text-red-300/90">{error}</span>
+                  </motion.div>
                 )}
-              </motion.button>
-            </form>
+              </AnimatePresence>
 
-            {/* Footer */}
-            <div className="mt-7 pt-6 flex items-center justify-center gap-2" style={{ borderTop: "1px solid rgba(255,255,255,0.05)" }}>
-              <motion.span className="w-1.5 h-1.5 rounded-full" style={{ background: "#22c55e" }} animate={{ opacity: [1, 0.3, 1] }} transition={{ duration: 2, repeat: Infinity }} />
-              <span className="text-[9px] tracking-widest" style={{ color: "rgba(255,255,255,0.2)" }}>ENCRYPTED · AUTHORIZED PERSONNEL ONLY</span>
+              <form onSubmit={handleSubmit} className="space-y-7">
+                {/* Identifier */}
+                <div>
+                  <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
+                    USERNAME
+                  </label>
+                  <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${idFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'
+                    }`}>
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2">
+                      <FiUser size={18} className={idFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
+                    </span>
+                    <input
+                      type="text"
+                      value={identifier}
+                      onChange={e => setIdentifier(e.target.value)}
+                      onFocus={() => setIdFocused(true)}
+                      onBlur={() => setIdFocused(false)}
+                      required
+                      autoComplete="username"
+                      placeholder="commander.alpha or user@drd.mil"
+                      className="w-full pl-12 pr-5 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
+                    />
+                  </div>
+                </div>
+
+                {/* Password */}
+                <div>
+                  <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
+                    ACCESS CODE
+                  </label>
+                  <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${pwFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'
+                    }`}>
+                    <span className="absolute left-4 top-1/2 -translate-y-1/2">
+                      <FiLock size={18} className={pwFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
+                    </span>
+                    <input
+                      type={showPass ? "text" : "password"}
+                      value={password}
+                      onChange={e => setPassword(e.target.value)}
+                      onFocus={() => setPwFocused(true)}
+                      onBlur={() => setPwFocused(false)}
+                      required
+                      autoComplete="current-password"
+                      placeholder="••••••••••"
+                      className="w-full pl-12 pr-12 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPass(v => !v)}
+                      tabIndex={-1}
+                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
+                    >
+                      {showPass ? <FiEyeOff size={18} /> : <FiEye size={18} />}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Submit button */}
+                <motion.button
+                  type="submit"
+                  disabled={loading || !identifier || !password}
+                  className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4 relative overflow-hidden transition-all duration-300"
+                  style={{
+                    background: loading || !identifier || !password
+                      ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
+                      : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                    cursor: loading || !identifier || !password ? "not-allowed" : "pointer",
+                  }}
+                  whileHover={{
+                    scale: loading || !identifier || !password ? 1 : 1.02,
+                    boxShadow: loading || !identifier || !password
+                      ? 'none'
+                      : '0 10px 40px -10px rgba(59,130,246,0.4)'
+                  }}
+                  whileTap={{ scale: 0.98 }}
+                >
+                  {loading ? (
+                    <>
+                      <motion.span
+                        className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
+                        animate={{ rotate: 360 }}
+                        transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+                      />
+                      <span>AUTHENTICATING...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>AUTHENTICATE</span>
+                      <FiArrowRight size={18} />
+                    </>
+                  )}
+                </motion.button>
+              </form>
+
+              {/* Footer */}
+              <div className="mt-8 pt-6 flex items-center justify-center gap-3 border-t border-white/[0.06]">
+                <motion.span
+                  className="w-2 h-2 rounded-full bg-emerald-400"
+                  animate={{ opacity: [1, 0.2, 1] }}
+                  transition={{ duration: 2, repeat: Infinity }}
+                />
+                <span className="text-[10px] tracking-[0.2em] text-white/75">ENCRYPTED · AUTHORIZED PERSONNEL ONLY</span>
+              </div>
             </div>
           </div>
+
+          {/* Additional info */}
+          <p className="mt-6 text-center text-xs text-white/70 tracking-wide">
+            Need help? Contact your system administrator
+          </p>
         </motion.div>
       </motion.div>
     </div>

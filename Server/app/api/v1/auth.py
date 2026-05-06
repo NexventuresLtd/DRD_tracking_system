@@ -47,6 +47,21 @@ async def refresh_token(
 ):
     """Refresh access token"""
     auth_service = AuthService(db)
+    try:
+        return await auth_service.refresh_token(data.refresh_token)
+    finally:
+        # Lightweight log for troubleshooting repeated refresh attempts
+        print("Auth refresh attempted")
+
+
+@router.post("/refresh/", response_model=TokenResponse, include_in_schema=False)
+async def refresh_token_slash(
+    data: RefreshToken,
+    db: AsyncSession = Depends(get_db)
+):
+    """Trailing-slash alias for refresh to avoid 307 redirects from clients."""
+    auth_service = AuthService(db)
+    print("Auth refresh (slash) attempted")
     return await auth_service.refresh_token(data.refresh_token)
 
 @router.post("/logout")
