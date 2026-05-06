@@ -8,7 +8,7 @@ class DRDApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'DRD Field Ops',
+      title: 'drd_tracking',
       debugShowCheckedModeBanner: false,
       theme: DRDTheme.lightTheme,
       darkTheme: DRDTheme.darkTheme,

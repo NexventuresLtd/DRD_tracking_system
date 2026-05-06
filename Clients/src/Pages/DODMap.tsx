@@ -860,14 +860,16 @@ function AlertsPanel({
 }) {
   const alerts = useMemo(() => {
     const result: { user: User; msg: string; elapsed: string; severity: "high" | "medium" }[] = [];
+    // Only show alerts for users with real names (not raw UUIDs/IDs)
+    const isKnownUser = (u: User) => u.name && u.name.length > 2 && !/^[0-9a-f-]{8,}$/i.test(u.name) && u.name !== "Unknown";
 
-    users.filter(u => u.flag === "help").forEach(u => {
+    users.filter(u => u.flag === "help" && isKnownUser(u)).forEach(u => {
       result.unshift({ user: u, msg: `${u.name} requested SOS`, elapsed: formatElapsed(u.flagTime || u.lastUpdate), severity: "high" });
     });
-    users.filter(u => u.status === "offline").forEach(u => {
+    users.filter(u => u.status === "offline" && isKnownUser(u)).forEach(u => {
       result.push({ user: u, msg: `${u.name} is OFFLINE`, elapsed: formatElapsed(u.lastUpdate), severity: "high" });
     });
-    users.filter(u => u.status === "stale" && u.flag !== "help").forEach(u => {
+    users.filter(u => u.status === "stale" && u.flag !== "help" && isKnownUser(u)).forEach(u => {
       const sec = Math.floor((Date.now() - u.lastUpdate.getTime()) / 1000);
       result.push({ user: u, msg: `${u.name} stale ${sec}s`, elapsed: `${sec}s`, severity: "medium" });
     });
@@ -1380,31 +1382,46 @@ function MessageModal({
           </select>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2 min-h-[200px] max-h-[350px] custom-scrollbar">
+        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-[200px] max-h-[350px] custom-scrollbar">
           {relevant.length === 0 ? (
             <div className="text-slate-500 text-xs text-center mt-10">No messages</div>
-          ) : relevant.map(m => (
-            <div key={m.id} className="flex flex-col" style={{ alignItems: m.from === "COMMANDER" ? "flex-end" : "flex-start" }}>
-              <div className="text-[9px] text-slate-500 mb-0.5 flex items-center gap-1">
-                {m.from} · {formatElapsed(m.time)}
-                {m.priority && m.priority !== "normal" && (
-                  <span className={`text-[8px] font-bold ${m.priority === "urgent" ? "text-red-500" : m.priority === "high" ? "text-yellow-500" : "text-slate-400"}`}>
-                    {m.priority.toUpperCase()}
-                  </span>
-                )}
+          ) : relevant.map(m => {
+            const isMine = m.from === "COMMANDER";
+            const senderName = isMine ? "You" : (users.find(u => u.user_id === m.from || u.name === m.from)?.name ?? m.from);
+            const initials = senderName.split(" ").map((w: string) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
+            return (
+              <div key={m.id} className="flex items-end gap-1.5" style={{ flexDirection: isMine ? "row-reverse" : "row" }}>
+                <div
+                  className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold"
+                  style={{ backgroundColor: isMine ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.3)", border: `1.5px solid ${isMine ? "rgba(59,130,246,0.5)" : "rgba(148,163,184,0.3)"}`, color: isMine ? "#60a5fa" : "#94a3b8" }}
+                  title={senderName}
+                >
+                  {initials}
+                </div>
+                <div className="flex flex-col max-w-[82%]" style={{ alignItems: isMine ? "flex-end" : "flex-start" }}>
+                  <div className="text-[9px] text-slate-500 mb-0.5 flex items-center gap-1">
+                    <span className="font-medium" style={{ color: isMine ? "#60a5fa" : "#94a3b8" }}>{senderName}</span>
+                    · {formatElapsed(m.time)}
+                    {m.priority && m.priority !== "normal" && (
+                      <span className={`text-[8px] font-bold ${m.priority === "urgent" ? "text-red-500" : m.priority === "high" ? "text-yellow-500" : "text-slate-400"}`}>
+                        {m.priority.toUpperCase()}
+                      </span>
+                    )}
+                  </div>
+                  <div
+                    className="px-3 py-2 rounded-lg text-xs"
+                    style={{
+                      backgroundColor: isMine ? "rgba(59,130,246,0.2)" : "rgba(51,65,85,0.6)",
+                      border: `1px solid ${isMine ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.08)"}`,
+                      color: "#e2e8f0",
+                    }}
+                  >
+                    {m.content}
+                  </div>
+                </div>
               </div>
-              <div
-                className="px-3 py-2 rounded-lg text-xs max-w-[85%]"
-                style={{
-                  backgroundColor: m.from === "COMMANDER" ? "rgba(59,130,246,0.2)" : "rgba(51,65,85,0.6)",
-                  border: `1px solid ${m.from === "COMMANDER" ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.08)"}`,
-                  color: "#e2e8f0",
-                }}
-              >
-                {m.content}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
 
         <div className="p-3 border-t border-white/10 flex gap-2">
@@ -1502,39 +1519,56 @@ function CommsPanel({
           </div>
 
           {/* Messages list */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-1.5 min-h-[120px]">
+          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-2 min-h-[120px]">
             {messages.length === 0 ? (
               <div className="text-slate-500 text-[10px] text-center mt-4">No messages</div>
             ) : (
               messages.slice(-40).map(m => {
                 const isFromCommander = m.from === "COMMANDER";
                 const sender = isFromCommander ? null : users.find(u => u.user_id === m.from || u.name === m.from);
+                const senderName = isFromCommander ? "You" : (sender?.name ?? m.from);
+                const initials = senderName.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
+                const teamColor = sender ? TEAM_COLORS[sender.group]?.primary : "#3b82f6";
                 return (
-                  <div key={m.id} className="flex flex-col" style={{ alignItems: isFromCommander ? "flex-end" : "flex-start" }}>
-                    <div className="text-[8px] text-slate-500 mb-0.5 flex items-center gap-1">
-                      <span>{isFromCommander ? "You" : (sender?.name ?? m.from)}</span>
-                      <span>·</span>
-                      <span>{formatElapsed(m.time)}</span>
-                      {m.priority && m.priority !== "normal" && (
-                        <span className="font-bold" style={{ color: priorityColors[m.priority] }}>
-                          {m.priority.toUpperCase()}
-                        </span>
-                      )}
-                    </div>
+                  <div key={m.id} className="flex items-end gap-1.5" style={{ flexDirection: isFromCommander ? "row-reverse" : "row" }}>
+                    {/* Avatar */}
                     <div
-                      className="px-2 py-1.5 rounded text-[11px] max-w-[90%]"
+                      className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold"
                       style={{
-                        backgroundColor: isFromCommander ? "rgba(59,130,246,0.18)" : "rgba(30,41,59,0.7)",
-                        border: `1px solid ${isFromCommander ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.07)"}`,
-                        color: "#e2e8f0",
+                        backgroundColor: isFromCommander ? "rgba(59,130,246,0.2)" : `${teamColor}20`,
+                        border: `1.5px solid ${isFromCommander ? "rgba(59,130,246,0.5)" : `${teamColor}60`}`,
+                        color: isFromCommander ? "#60a5fa" : teamColor,
                       }}
+                      title={senderName}
                     >
-                      {!isFromCommander && (
-                        <span className="text-[8px] font-bold block mb-0.5" style={{ color: m.to === "ALL" ? "#94a3b8" : "#60a5fa" }}>
-                          {m.to === "ALL" ? "→ ALL" : `→ ${users.find(u => u.user_id === m.to)?.name ?? m.to}`}
-                        </span>
-                      )}
-                      {m.content}
+                      {initials}
+                    </div>
+                    <div className="flex flex-col max-w-[80%]" style={{ alignItems: isFromCommander ? "flex-end" : "flex-start" }}>
+                      <div className="text-[8px] text-slate-500 mb-0.5 flex items-center gap-1">
+                        <span className="font-medium" style={{ color: isFromCommander ? "#60a5fa" : teamColor }}>{senderName}</span>
+                        <span>·</span>
+                        <span>{formatElapsed(m.time)}</span>
+                        {m.priority && m.priority !== "normal" && (
+                          <span className="font-bold" style={{ color: priorityColors[m.priority] }}>
+                            {m.priority.toUpperCase()}
+                          </span>
+                        )}
+                      </div>
+                      <div
+                        className="px-2.5 py-1.5 rounded-lg text-[11px]"
+                        style={{
+                          backgroundColor: isFromCommander ? "rgba(59,130,246,0.18)" : "rgba(30,41,59,0.7)",
+                          border: `1px solid ${isFromCommander ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.07)"}`,
+                          color: "#e2e8f0",
+                        }}
+                      >
+                        {!isFromCommander && (
+                          <span className="text-[8px] font-bold block mb-0.5" style={{ color: m.to === "ALL" ? "#94a3b8" : "#60a5fa" }}>
+                            {m.to === "ALL" ? "→ ALL" : `→ ${users.find(u => u.user_id === m.to)?.name ?? m.to}`}
+                          </span>
+                        )}
+                        {m.content}
+                      </div>
                     </div>
                   </div>
                 );
@@ -2630,6 +2664,7 @@ export default function DODMap() {
   const focusUserOnMap = useCallback((user: User) => {
     setMapFlyTarget({ lat: user.lat, lng: user.lng });
     setSelectedUser(user);
+    setSidebarOpen(true);
     setPanels(p => ({ ...p, selectedUser: true }));
   }, []);
 
@@ -3625,18 +3660,53 @@ export default function DODMap() {
                 </Marker>
               ))}
 
+              {/* Team grouping lines — connect same-team members within ~400m */}
+              {(() => {
+                const lines: React.ReactNode[] = [];
+                const teamGroups = new Map<string, typeof filteredUsers>();
+                for (const u of filteredUsers) {
+                  const key = u.group;
+                  if (!teamGroups.has(key)) teamGroups.set(key, []);
+                  teamGroups.get(key)!.push(u);
+                }
+                teamGroups.forEach((members, team) => {
+                  if (members.length < 2) return;
+                  const col = TEAM_COLORS[team as Team]?.primary ?? "#3b82f6";
+                  for (let i = 0; i < members.length; i++) {
+                    for (let j = i + 1; j < members.length; j++) {
+                      const a = members[i], b = members[j];
+                      const dist = distanceKm(a.lat, a.lng, b.lat, b.lng);
+                      if (dist <= 0.4) {
+                        lines.push(
+                          <Polyline
+                            key={`grp-${a.user_id}-${b.user_id}`}
+                            positions={[[a.lat, a.lng], [b.lat, b.lng]]}
+                            color={col}
+                            weight={1.5}
+                            opacity={0.45}
+                            dashArray="4 6"
+                          />
+                        );
+                      }
+                    }
+                  }
+                });
+                return lines;
+              })()}
+
               {/* User Markers */}
               {filteredUsers.map(user => (
                 <Marker
                   key={user.user_id}
                   position={[user.lat, user.lng]}
                   icon={createUserIcon(user, selectedUser?.user_id === user.user_id)}
-                  eventHandlers={{ click: () => setSelectedUser(user) }}
+                  eventHandlers={{ click: () => focusUserOnMap(user) }}
                 >
-                  <Tooltip permanent direction="top" offset={[0, -18]}>
+                  <Tooltip direction="top" offset={[0, -18]} opacity={0.95}>
                     <div className="text-[9px] md:text-[10px] text-center" style={{ fontFamily: "'Poppins', sans-serif" }}>
                       <div className="font-bold">{user.name}</div>
-                      <div className="text-slate-500">{formatElapsed(user.lastUpdate)}</div>
+                      <div className="text-slate-500">{user.group} · {formatElapsed(user.lastUpdate)}</div>
+                      {user.speed != null && <div className="text-slate-400">{user.speed.toFixed(1)} km/h · {user.heading || 0}°</div>}
                     </div>
                   </Tooltip>
                 </Marker>

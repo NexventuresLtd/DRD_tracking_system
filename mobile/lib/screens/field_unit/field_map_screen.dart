@@ -415,8 +415,19 @@ class _FieldMapScreenState extends State<FieldMapScreen>
             // ── Top-left status HUD ──────────────────────────────────────
             Positioned(top: 8, left: 8, child: _buildStatusHud(locProvider)),
 
-            // ── Team count badge ─────────────────────────────────────────
-            Positioned(top: 8, right: 8, child: _buildTeamBadge()),
+            // ── Top-right controls (team badge + logout) ─────────────────
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  _buildTeamBadge(),
+                  const SizedBox(height: 8),
+                  _buildLogoutButton(),
+                ],
+              ),
+            ),
 
             // ── Active route summary ────────────────────────────────────
             Positioned(
@@ -1051,6 +1062,72 @@ class _FieldMapScreenState extends State<FieldMapScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildLogoutButton() {
+    return GestureDetector(
+      onTap: () async {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            backgroundColor: const Color(0xFF0F1C2E),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            title: const Row(
+              children: [
+                Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 18),
+                SizedBox(width: 8),
+                Text('Sign Out', style: TextStyle(color: Colors.white, fontSize: 15)),
+              ],
+            ),
+            content: Text(
+              'End your field session and sign out?',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.6), fontSize: 13),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: Text('Cancel', style: TextStyle(color: Colors.white.withValues(alpha: 0.4))),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Sign Out', style: TextStyle(color: Color(0xFFEF4444))),
+              ),
+            ],
+          ),
+        );
+        if (confirmed == true && mounted) {
+          await context.read<AuthProvider>().logout();
+          if (mounted) Navigator.pushReplacementNamed(context, '/login');
+        }
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0F1C2E).withValues(alpha: 0.93),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: const Color(0xFFEF4444).withValues(alpha: 0.3),
+            width: 1,
+          ),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 14),
+            SizedBox(width: 5),
+            Text(
+              'LOGOUT',
+              style: TextStyle(
+                color: Color(0xFFEF4444),
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 1,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
