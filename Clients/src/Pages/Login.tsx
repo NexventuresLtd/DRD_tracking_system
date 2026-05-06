@@ -3,8 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   FiShield, FiUser, FiLock, FiEye, FiEyeOff,
-  FiAlertTriangle, FiZap, FiRadio, FiWifi, FiNavigation,
-  FiChevronRight, FiArrowRight
+  FiAlertTriangle,  FiRadio, FiWifi, FiNavigation, FiArrowRight
 } from "react-icons/fi";
 import * as api from "../services/api";
 
