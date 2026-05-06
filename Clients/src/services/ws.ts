@@ -1,5 +1,5 @@
 const BASE_WS = (() => {
-  const url = (import.meta.env.VITE_API_URL as string) || 'https://drd.nexventures.net/';
+  const url = import.meta.env.VITE_API_URL || 'https://drd.nexventures.net/';
   return url.replace(/^https/, 'wss').replace(/^http/, 'ws');
 })();
 console.log(`WebSocket Base URL: ${BASE_WS}`);
