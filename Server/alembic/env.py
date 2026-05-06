@@ -1,3 +1,4 @@
+  GNU nano 7.2                                                                            alembic/env.py                                                                                      
 # alembic/env.py
 from logging.config import fileConfig
 from sqlalchemy import engine_from_config
@@ -5,7 +6,9 @@ from sqlalchemy import pool
 from alembic import context
 import sys
 import os
+from dotenv import load_dotenv
 
+load_dotenv()  # loads .env
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(__file__)))
 
