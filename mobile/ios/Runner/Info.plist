@@ -70,5 +70,13 @@
 	<string>This app needs access to your location to track your position and show it to commanders in real-time.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
 	<string>This app needs access to your location for background tracking during field operations.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>drd_tracking needs camera access to capture evidence photos when marking tactical positions.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>drd_tracking needs photo library access to attach evidence images to tactical marks.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>drd_tracking needs to save captured evidence photos to your photo library.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Camera access requires microphone permission on some devices.</string>
 </dict>
 </plist>

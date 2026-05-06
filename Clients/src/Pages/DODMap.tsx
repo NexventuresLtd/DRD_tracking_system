@@ -2675,6 +2675,108 @@ function AllEventsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+// ─────────────────────────── POI POPUP WITH EVIDENCE ───────────────────────────
+function POIPopup({ poi, onDeactivate }: { poi: POI; onDeactivate: (id: string) => void }) {
+  const [evidence, setEvidence] = useState<Array<{ id: string; url: string; file_name: string; caption?: string; created_at: string }>>([]);
+  const [loadingEvidence, setLoadingEvidence] = useState(false);
+  const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    // Only fetch for real POIs (not demo data with "poi_X" ids)
+    if (!poi.id || poi.id.startsWith("poi_")) return;
+    setLoadingEvidence(true);
+    api.getPOIEvidence(poi.id)
+      .then(res => setEvidence(res.data ?? []))
+      .catch(() => setEvidence([]))
+      .finally(() => setLoadingEvidence(false));
+  }, [poi.id]);
+
+  const info = POI_ICONS_CONFIG[poi.type];
+
+  return (
+    <div style={{ fontFamily: "'Poppins', sans-serif", minWidth: 200 }}>
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-2">
+        <span style={{ color: info.color }}>{info.icon}</span>
+        <span className="font-bold text-sm text-slate-900 dark:text-white truncate">{poi.label}</span>
+      </div>
+      <div className="text-[10px] text-slate-500 space-y-0.5 mb-2">
+        <div>Type: <span className="font-semibold">{info.label}</span></div>
+        <div>Status: <span className="font-semibold">{poi.status || "Active"}</span></div>
+        <div>Coords: {poi.lat.toFixed(4)}, {poi.lng.toFixed(4)}</div>
+        {poi.team && <div>Team: {poi.team}</div>}
+      </div>
+
+      {/* Evidence section */}
+      <div className="border-t border-slate-200 pt-2 mt-2">
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <FiAlertCircle size={11} color="#3b82f6" />
+          <span className="text-[10px] font-bold text-slate-600 tracking-wide">EVIDENCE</span>
+          {loadingEvidence && <span className="w-3 h-3 border border-slate-300 border-t-blue-500 rounded-full animate-spin" />}
+        </div>
+
+        {!loadingEvidence && evidence.length === 0 && (
+          <div className="text-[10px] text-slate-400 italic">No evidence attached</div>
+        )}
+
+        {evidence.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-1">
+            {evidence.map(ev => (
+              <button
+                key={ev.id}
+                onClick={() => setLightboxUrl(ev.url)}
+                className="relative rounded overflow-hidden border border-slate-200 hover:border-blue-400 transition-colors"
+                style={{ width: 64, height: 64 }}
+                title={ev.caption || ev.file_name}
+              >
+                <img
+                  src={ev.url}
+                  alt={ev.caption || ev.file_name}
+                  style={{ width: 64, height: 64, objectFit: "cover" }}
+                  onError={e => { (e.target as HTMLImageElement).style.display = "none"; }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 hover:opacity-100 transition-opacity">
+                  <FiEye size={16} color="white" />
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div
+          className="fixed inset-0 bg-black/80 z-[9999] flex items-center justify-center p-4"
+          onClick={() => setLightboxUrl(null)}
+        >
+          <div className="relative max-w-[90vw] max-h-[90vh]">
+            <img
+              src={lightboxUrl}
+              alt="Evidence"
+              className="max-w-full max-h-[85vh] rounded-xl object-contain"
+              onClick={e => e.stopPropagation()}
+            />
+            <button
+              onClick={() => setLightboxUrl(null)}
+              className="absolute top-2 right-2 w-8 h-8 rounded-full bg-black/60 flex items-center justify-center text-white hover:bg-black/80 transition-colors"
+            >
+              <FiX size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      <button
+        onClick={() => onDeactivate(poi.id)}
+        className="mt-3 w-full px-2 py-1.5 bg-red-50 border border-red-200 rounded text-[10px] text-red-500 hover:bg-red-100 transition-colors font-semibold"
+      >
+        Deactivate POI
+      </button>
+    </div>
+  );
+}
+
 // ─────────────────────────── MAIN COMPONENT ───────────────────────────
 export default function DODMap() {
   const [users, setUsers] = useState<User[]>([]);
@@ -3710,24 +3812,9 @@ export default function DODMap() {
 
               {/* POI Markers */}
               {pois.map(poi => (
-                <Marker
-                  key={poi.id}
-                  position={[poi.lat, poi.lng]}
-                  icon={createPOIIcon(poi)}
-                >
-                  <Popup>
-                    <div className="text-xs" style={{ fontFamily: "'Poppins', sans-serif" }}>
-                      <div className="font-bold text-sm">{POI_ICONS_CONFIG[poi.type].icon} {poi.label}</div>
-                      <div className="text-slate-500 mt-1">Type: {POI_ICONS_CONFIG[poi.type].label}</div>
-                      <div className="text-slate-500">Status: {poi.status || "N/A"}</div>
-                      {poi.team && <div className="text-slate-500">Team: {poi.team}</div>}
-                      <button
-                        onClick={() => handleDeactivatePOI(poi.id)}
-                        className="mt-2 w-full px-2 py-1 bg-red-500/20 border border-red-500/50 rounded text-[10px] text-red-400 hover:bg-red-500/30 transition-colors"
-                      >
-                        Deactivate
-                      </button>
-                    </div>
+                <Marker key={poi.id} position={[poi.lat, poi.lng]} icon={createPOIIcon(poi)}>
+                  <Popup minWidth={220} maxWidth={280}>
+                    <POIPopup poi={poi} onDeactivate={handleDeactivatePOI} />
                   </Popup>
                 </Marker>
               ))}

@@ -118,4 +118,9 @@ export const deleteZone = (id: string) => api.delete(`/api/v1/zones/${id}`);
 export const assignZone = (zoneId: string, data: object) =>
   api.post(`/api/v1/zones/${zoneId}/assign`, data);
 
+// ── Evidence ──────────────────────────────────────────────────────────────────
+export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/${poiId}`);
+export const getMessageEvidence = (messageId: string) => api.get(`/api/v1/evidence/message/${messageId}`);
+export const deleteEvidence = (id: string) => api.delete(`/api/v1/evidence/${id}`);
+
 export default api;

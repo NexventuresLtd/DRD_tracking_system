@@ -199,19 +199,20 @@ class _LoginScreenState extends State<LoginScreen>
                         'drd_tracking',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 26,
+                          fontSize: 30,
                           fontWeight: FontWeight.w800,
                           letterSpacing: 2,
                           fontFamily: 'Poppins',
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
+                      const SizedBox(height: 6),
+                      const Text(
                         'FIELD COORDINATION SYSTEM',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.5),
-                          fontSize: 9,
+                          color: Colors.white,
+                          fontSize: 11,
                           letterSpacing: 3,
+                          fontWeight: FontWeight.w600,
                           fontFamily: 'Poppins',
                         ),
                       ),
@@ -246,18 +247,19 @@ class _LoginScreenState extends State<LoginScreen>
                         'Welcome Back',
                         style: TextStyle(
                           color: Colors.white,
-                          fontSize: 24,
+                          fontSize: 28,
                           fontWeight: FontWeight.w800,
                           letterSpacing: 0.5,
                           fontFamily: 'Poppins',
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
+                      const SizedBox(height: 6),
+                      const Text(
                         'Sign in to your tactical account',
                         style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.45),
-                          fontSize: 12,
+                          color: Colors.white,
+                          fontSize: 14,
+                          fontWeight: FontWeight.w500,
                           fontFamily: 'Poppins',
                         ),
                       ),
@@ -361,12 +363,13 @@ class _LoginScreenState extends State<LoginScreen>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  Text(
+                                  const Text(
                                     'SECURE ENCRYPTED CONNECTION',
                                     style: TextStyle(
-                                      fontSize: 8,
+                                      fontSize: 11,
                                       letterSpacing: 2,
-                                      color: Colors.white.withValues(alpha: 0.2),
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
                                       fontFamily: 'Poppins',
                                     ),
                                   ),
@@ -404,11 +407,11 @@ class _LoginScreenState extends State<LoginScreen>
         Text(
           label,
           style: TextStyle(
-            fontSize: 9,
+            fontSize: 11,
             fontWeight: FontWeight.w700,
-            letterSpacing: 2,
+            letterSpacing: 1.5,
             fontFamily: 'Poppins',
-            color: focused ? DRDTheme.primaryColor : Colors.white.withValues(alpha: 0.35),
+            color: focused ? DRDTheme.primaryColor : Colors.white,
           ),
         ),
         const SizedBox(height: 8),
@@ -431,14 +434,14 @@ class _LoginScreenState extends State<LoginScreen>
               obscureText: obscureText,
               style: const TextStyle(
                 color: Colors.white,
-                fontSize: 13,
+                fontSize: 15,
                 fontFamily: 'Poppins',
               ),
               decoration: InputDecoration(
                 hintText: hint,
-                hintStyle: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.2),
-                  fontSize: 12,
+                hintStyle: const TextStyle(
+                  color: Colors.white54,
+                  fontSize: 14,
                   fontFamily: 'Poppins',
                 ),
                 prefixIcon: Icon(

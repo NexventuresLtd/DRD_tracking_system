@@ -7,7 +7,8 @@ import asyncio
 
 from app.config import settings
 from app.database import init_db
-from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions
+from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence
+from fastapi.staticfiles import StaticFiles
 from app.websocket import location_ws, event_ws, message_ws
 from app.middleware.cors import setup_cors
 from app.websocket.manager import manager
@@ -95,6 +96,12 @@ app.include_router(pois.router, prefix="/api/v1")
 app.include_router(events.router, prefix="/api/v1")
 app.include_router(messages.router, prefix="/api/v1")
 app.include_router(zones.router, prefix="/api/v1")
+app.include_router(evidence.router, prefix="/api/v1")
+
+# Serve uploaded files
+import os
+os.makedirs("uploads/evidence", exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Include WebSocket routers
 app.include_router(location_ws.router)

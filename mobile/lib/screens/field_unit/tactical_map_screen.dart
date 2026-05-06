@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_map/flutter_map.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../config/constants.dart';
@@ -251,6 +254,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     )..repeat(reverse: true);
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      _requestPermissions();
       _initTracking();
       _loadMapData();
       _loadMessages();
@@ -268,6 +272,214 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     if (auth.user != null) {
       await context.read<LocationProvider>().initialize(auth.user!.id);
     }
+  }
+
+  // ── Permissions ──────────────────────────────────────────────────────────────
+
+  Future<void> _requestPermissions() async {
+    await [Permission.camera, Permission.photos].request();
+  }
+
+  // ── Evidence helpers ─────────────────────────────────────────────────────────
+
+  Future<String?> _uploadImageAsEvidence({
+    required XFile image,
+    String? poiId,
+    String? messageId,
+    String? caption,
+  }) async {
+    try {
+      final token = await _storage.getToken();
+      if (token == null) return null;
+
+      final uri = Uri.parse('${AppConstants.baseUrl}/evidence/upload');
+      final req = http.MultipartRequest('POST', uri)
+        ..headers['Authorization'] = 'Bearer $token'
+        ..files.add(await http.MultipartFile.fromPath('file', image.path,
+            filename: image.name))
+        ..fields['caption'] = caption ?? '';
+
+      if (poiId != null) req.fields['poi_id'] = poiId;
+      if (messageId != null) req.fields['message_id'] = messageId;
+
+      final streamed = await req.send().timeout(const Duration(seconds: 30));
+      final body = await streamed.stream.bytesToString();
+      if (streamed.statusCode == 200) {
+        final data = jsonDecode(body) as Map<String, dynamic>;
+        final path = data['url'] as String?;
+        if (path == null) return null;
+        // Build absolute URL from base URL (strip /api/v1)
+        final base = AppConstants.baseUrl.replaceAll('/api/v1', '');
+        return '$base$path';
+      }
+    } catch (e) {
+      debugPrint('Evidence upload error: $e');
+    }
+    return null;
+  }
+
+  Future<void> _showEvidenceCaptureDialog(String poiId, String markLabel) async {
+    if (!mounted) return;
+    final pick = await showModalBottomSheet<ImageSource?>(
+      context: context,
+      backgroundColor: const Color(0xFF0F1C2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 18),
+              decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+            ),
+            const Row(
+              children: [
+                Icon(Icons.camera_alt_outlined, color: DRDTheme.primaryColor, size: 18),
+                SizedBox(width: 8),
+                Text('Add Evidence Photo?', style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text('Attach a photo to this mark as evidence for the command center.',
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.5), fontSize: 12, fontFamily: 'Poppins')),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: _evidencePickerBtn(Icons.camera_alt, 'Take Photo', DRDTheme.primaryColor,
+                    () => Navigator.pop(ctx, ImageSource.camera)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _evidencePickerBtn(Icons.photo_library_outlined, 'Gallery', DRDTheme.accentColor,
+                    () => Navigator.pop(ctx, ImageSource.gallery)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _evidencePickerBtn(Icons.close, 'Skip', Colors.white38,
+                    () => Navigator.pop(ctx, null)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (pick == null || !mounted) return;
+
+    final status = await (pick == ImageSource.camera ? Permission.camera : Permission.photos).status;
+    if (status.isDenied) {
+      await (pick == ImageSource.camera ? Permission.camera : Permission.photos).request();
+    }
+
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: pick, imageQuality: 75, maxWidth: 1280);
+    if (image == null || !mounted) return;
+
+    _showSnack('Uploading evidence…', color: DRDTheme.primaryColor);
+    final url = await _uploadImageAsEvidence(image: image, poiId: poiId, caption: markLabel);
+
+    if (!mounted) return;
+    if (url != null) {
+      _showSnack('Evidence photo uploaded ✓', color: DRDTheme.successColor);
+    } else {
+      _showSnack('Upload failed — saved locally', color: DRDTheme.warningColor);
+    }
+  }
+
+  Widget _evidencePickerBtn(IconData icon, String label, Color color, VoidCallback onTap) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 12),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(color: color.withValues(alpha: 0.35)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 4),
+            Text(label, style: TextStyle(color: color, fontSize: 10, fontWeight: FontWeight.w700, fontFamily: 'Poppins')),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Chat image upload ─────────────────────────────────────────────────────────
+
+  Future<void> _pickAndSendChatImage() async {
+    // Show source picker first (no async gap before context use)
+    final source = await showModalBottomSheet<ImageSource?>(
+      context: context,
+      backgroundColor: const Color(0xFF0F1C2E),
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 36, height: 4,
+              margin: const EdgeInsets.only(bottom: 18),
+              decoration: BoxDecoration(
+                  color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+            ),
+            const Text('Send Image',
+                style: TextStyle(
+                    color: Colors.white, fontSize: 15,
+                    fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: _evidencePickerBtn(Icons.camera_alt, 'Camera',
+                      DRDTheme.primaryColor,
+                      () => Navigator.pop(ctx, ImageSource.camera)),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _evidencePickerBtn(
+                      Icons.photo_library_outlined, 'Gallery',
+                      DRDTheme.accentColor,
+                      () => Navigator.pop(ctx, ImageSource.gallery)),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (source == null || !mounted) return;
+
+    // Request permission after user chose source
+    final perm = source == ImageSource.camera ? Permission.camera : Permission.photos;
+    if (await perm.isDenied) await perm.request();
+    if (!mounted) return;
+
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+        source: source, imageQuality: 70, maxWidth: 1024);
+    if (image == null || !mounted) return;
+
+    setState(() => _sending = true);
+    final url = await _uploadImageAsEvidence(image: image);
+    if (!mounted) return;
+    if (url != null) {
+      await _sendMessage('[evidence_image]$url');
+    } else {
+      _showSnack('Image upload failed', color: DRDTheme.dangerColor);
+    }
+    if (mounted) setState(() => _sending = false);
   }
 
   Future<void> _loadMapData() async {
@@ -399,9 +611,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _markMode = false;
     });
 
-    // POST to backend: create POI
+    // POST to backend: create POI — capture id for evidence upload
+    String? poiId;
     try {
-      await _api.post('/pois', {
+      final res = await _api.post('/pois', {
         'name': label,
         'poi_type': markType['poi_type'],
         'latitude': pos.latitude,
@@ -410,6 +623,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         'status': 'active',
         'visible_to_all': true,
       });
+      poiId = (res as Map<String, dynamic>?)?['id'] as String?;
     } catch (_) {}
 
     // POST to backend: create event
@@ -429,6 +643,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       '${markType['label']} marked & reported to command',
       color: Color(markType['color'] as int),
     );
+
+    // Offer evidence photo capture after mark is placed
+    if (poiId != null && mounted) {
+      await _showEvidenceCaptureDialog(poiId, label);
+    }
   }
 
   Future<void> _triggerSOS(Map<String, dynamic> sosType) async {
@@ -2535,6 +2754,99 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   // ── Comms Tab ────────────────────────────────────────────────────────────────
 
+  Widget _buildImageMessage(String url) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(8),
+      child: GestureDetector(
+        onTap: () => _showFullImage(url),
+        child: Image.network(
+          url,
+          width: 200,
+          fit: BoxFit.cover,
+          loadingBuilder: (ctx, child, progress) {
+            if (progress == null) return child;
+            return Container(
+              width: 200,
+              height: 120,
+              decoration: BoxDecoration(
+                color: DRDTheme.backgroundColor,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Center(
+                child: CircularProgressIndicator(
+                  value: progress.expectedTotalBytes != null
+                      ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                      : null,
+                  color: DRDTheme.primaryColor,
+                  strokeWidth: 2,
+                ),
+              ),
+            );
+          },
+          errorBuilder: (ctx, err, stack) => Container(
+            width: 200,
+            height: 80,
+            decoration: BoxDecoration(
+              color: DRDTheme.backgroundColor,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white12),
+            ),
+            child: const Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(Icons.broken_image_outlined, color: Colors.white38, size: 28),
+                SizedBox(height: 4),
+                Text('Image unavailable', style: TextStyle(color: Colors.white38, fontSize: 10)),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showFullImage(String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => GestureDetector(
+        onTap: () => Navigator.pop(ctx),
+        child: Scaffold(
+          backgroundColor: Colors.black87,
+          body: Stack(
+            children: [
+              Center(
+                child: InteractiveViewer(
+                  child: Image.network(
+                    url,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, err, stack) => const Icon(
+                      Icons.broken_image_outlined,
+                      color: Colors.white38, size: 48,
+                    ),
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 48, right: 16,
+                child: GestureDetector(
+                  onTap: () => Navigator.pop(ctx),
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.close, color: Colors.white, size: 20),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildCommsTab(AuthProvider auth) {
     final myId = auth.user?.id ?? '';
     return Column(
@@ -2635,6 +2947,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                                       ),
                                     ),
                                   if (!fromMe) const SizedBox(height: 2),
+                                  // Image message
+                                  if (content.startsWith('[evidence_image]'))
+                                    _buildImageMessage(content.replaceFirst('[evidence_image]', ''))
+                                  else
                                   Text(
                                     content,
                                     style: const TextStyle(
@@ -2714,7 +3030,23 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   onSubmitted: (v) => _sendMessage(v),
                 ),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
+              // Camera button
+              GestureDetector(
+                onTap: _sending ? null : _pickAndSendChatImage,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: DRDTheme.primaryColor.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
+                  ),
+                  child: const Icon(Icons.camera_alt_outlined, color: DRDTheme.primaryColor, size: 18),
+                ),
+              ),
+              const SizedBox(width: 6),
+              // Send button
               GestureDetector(
                 onTap: () => _sendMessage(_msgCtrl.text),
                 child: Container(
@@ -2725,13 +3057,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: _sending
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2,
-                          ),
+                      ? const Padding(
+                          padding: EdgeInsets.all(11),
+                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
                         )
                       : const Icon(Icons.send, color: Colors.white, size: 18),
                 ),
