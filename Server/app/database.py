@@ -53,7 +53,8 @@ async def init_db():
     from app.models.message import Message
     from app.models.zone import Zone, ZoneCoordinate, ZoneAssignment
     from app.models.notification import Notification, UserFlag
-    from app.models.audit import AuditLog, UserSession  # Changed from Session to UserSession
+    from app.models.audit import AuditLog, UserSession
+    from app.models.evidence import Evidence
     
     async with engine.begin() as conn:
         # Create all tables

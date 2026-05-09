@@ -13,6 +13,8 @@ import 'package:http_parser/http_parser.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
+import 'live_feed_screen.dart';
+import '../../services/notification_service.dart';
 import '../../providers/location_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/storage_service.dart';
@@ -213,7 +215,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   final StorageService _storage = StorageService();
 
   // ── State ───────────────────────────────────────────────────────────────────
-  TacMapType _mapType = TacMapType.tactical;
+  TacMapType _mapType = TacMapType.standard;
   List<Map<String, dynamic>> _teamLocations = [];
   List<Map<String, dynamic>> _myRoutes = [];
   List<Map<String, dynamic>> _sharedPois = [];
@@ -227,7 +229,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Map<String, dynamic>? _activeNavRoute;
   LatLng? _navDestination;
   Map<String, dynamic>? _activeFollowSession;
-  List<LatLng> _activeRouteRoad = []; // OSRM road polyline for active route
+  List<LatLng> _activeRouteRoad = [];
+  // Checkpoint tracking
+  int _currentWaypointIndex = 0;
+  bool _routePaused = false;
+  bool _checkpointReached = false;
+  String? _currentCheckpointLabel;
 
   // ── Controllers ─────────────────────────────────────────────────────────────
   Timer? _refreshTimer;
@@ -288,7 +295,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     String? messageId,
     String? caption,
   }) async {
-    MediaType _mediaTypeForImage(String path) {
+    MediaType mediaTypeForImage(String path) {
       final lowerPath = path.toLowerCase();
       if (lowerPath.endsWith('.png')) {
         return MediaType('image', 'png');
@@ -308,10 +315,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         ..headers['Authorization'] = 'Bearer $token'
         ..files.add(
           await http.MultipartFile.fromPath(
-            'file',
+            'files',            // server expects field name "files" (plural)
             image.path,
             filename: image.name,
-            contentType: _mediaTypeForImage(image.path),
+            contentType: mediaTypeForImage(image.path),
           ),
         )
         ..fields['caption'] = caption ?? '';
@@ -396,7 +403,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     String markLabel,
   ) async {
     if (!mounted) return;
-    final pick = await showModalBottomSheet<ImageSource?>(
+    final pick = await showModalBottomSheet<String?>(
       context: context,
       backgroundColor: const Color(0xFF0F1C2E),
       shape: const RoundedRectangleBorder(
@@ -452,7 +459,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     Icons.camera_alt,
                     'Take Photo',
                     DRDTheme.primaryColor,
-                    () => Navigator.pop(ctx, ImageSource.camera),
+                    () => Navigator.pop(ctx, 'camera'),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -461,7 +468,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     Icons.photo_library_outlined,
                     'Gallery',
                     DRDTheme.accentColor,
-                    () => Navigator.pop(ctx, ImageSource.gallery),
+                    () => Navigator.pop(ctx, 'gallery'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _evidencePickerBtn(
+                    Icons.videocam_rounded,
+                    'Live Feed',
+                    const Color(0xFFEF4444),
+                    () => Navigator.pop(ctx, 'live'),
                   ),
                 ),
                 const SizedBox(width: 10),
@@ -480,38 +496,33 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       ),
     );
 
-    if (pick == null || !mounted) return;
+    if (!mounted) return;
 
-    final status =
-        await (pick == ImageSource.camera
-                ? Permission.camera
-                : Permission.photos)
-            .status;
-    if (status.isDenied) {
-      await (pick == ImageSource.camera ? Permission.camera : Permission.photos)
-          .request();
+    // Live feed option — open camera as live stream to command
+    if (pick == 'live') {
+      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveFeedScreen()));
+      return;
     }
 
+    if (pick == null) return;
+
+    final source = pick == 'camera' ? ImageSource.camera : ImageSource.gallery;
+    final perm = source == ImageSource.camera ? Permission.camera : Permission.photos;
+    if (await perm.isDenied) await perm.request();
+    if (!mounted) return;
+
     final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: pick,
-      imageQuality: 75,
-      maxWidth: 1280,
-    );
+    final image = await picker.pickImage(source: source, imageQuality: 75, maxWidth: 1280);
     if (image == null || !mounted) return;
 
     _showSnack('Uploading evidence…', color: DRDTheme.primaryColor);
-    final url = await _uploadImageAsEvidence(
-      image: image,
-      poiId: poiId,
-      caption: markLabel,
-    );
+    final url = await _uploadImageAsEvidence(image: image, poiId: poiId, caption: markLabel);
 
     if (!mounted) return;
     if (url != null) {
       _showSnack('Evidence photo uploaded ✓', color: DRDTheme.successColor);
     } else {
-      _showSnack('Upload failed — saved locally', color: DRDTheme.warningColor);
+      _showSnack('Upload failed — check connection', color: const Color(0xFFEF4444));
     }
   }
 
@@ -642,26 +653,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     final auth = context.read<AuthProvider>();
     final teamId = auth.user?.teamId;
 
-    try {
-      final results = await Future.wait([
-        _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations'),
-        _api.get(
-          teamId != null
-              ? '/routes?is_active=true&team_id=$teamId'
-              : '/routes?is_active=true',
-        ),
-        _api.get('/pois?status=active'),
-        _api.get('/route-follow-sessions/me'),
-      ]);
-      if (!mounted) return;
-      setState(() {
-        _teamLocations =
-            (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _myRoutes = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _sharedPois = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
-        _activeFollowSession = results[3] as Map<String, dynamic>?;
-      });
-    } catch (_) {}
+    // Each request is independent — a 404 on one never kills the others.
+    final results = await Future.wait([
+      _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations').catchError((_) => null),
+      _api.get(teamId != null ? '/routes?is_active=true&team_id=$teamId' : '/routes?is_active=true').catchError((_) => null),
+      _api.get('/pois?status=active').catchError((_) => null),
+      _api.get('/route-follow-sessions/me').catchError((_) => null),
+    ]);
+
+    if (!mounted) return;
+    setState(() {
+      _teamLocations = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _myRoutes      = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _sharedPois    = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final session  = results[3];
+      if (session is Map<String, dynamic>) _activeFollowSession = session;
+    });
   }
 
   Future<void> _loadMessages() async {
@@ -678,6 +685,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   void _connectWebSockets() async {
+    // Cache auth info BEFORE any await to avoid BuildContext-across-async-gap warning
+    final cachedTeamName = context.read<AuthProvider>().user?.teamName ?? 'Your Team';
     final token = await _storage.getToken();
     if (token == null) return;
 
@@ -726,6 +735,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
     // Event WebSocket - keep routes and POIs synced in real time
     try {
+      // Use the team name cached before the first async gap
+
       _evtChannel = WebSocketChannel.connect(
         Uri.parse('${AppConstants.wsUrl}/events?token=$token'),
       );
@@ -734,11 +745,13 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           final data = jsonDecode(raw as String) as Map<String, dynamic>;
           final d = (data['data'] ?? data) as Map<String, dynamic>;
           final eventType = (d['event_type'] ?? '').toString().toUpperCase();
-          if (eventType == 'ROUTE' ||
-              eventType == 'ZONE' ||
-              eventType == 'POI' ||
-              eventType.startsWith('ROUTE_FOLLOW')) {
+          if (eventType == 'ROUTE' || eventType == 'ZONE' || eventType == 'POI' || eventType.startsWith('ROUTE_FOLLOW')) {
             _loadMapData();
+            // Push notification for new route assigned (works even when app is in background)
+            if (eventType == 'ROUTE') {
+              final routeName = d['description'] as String? ?? 'New mission assigned';
+              NotificationService.instance.showNewRoute(routeName, cachedTeamName);
+            }
           }
         } catch (_) {}
       });
@@ -1194,6 +1207,13 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         final myPos = LatLng(loc.latitude, loc.longitude);
         final myId = auth.user?.id;
         final topPad = MediaQuery.of(context).padding.top;
+
+        // Check for checkpoint arrival after every render
+        if (_activeNavRoute != null && !_routePaused && !_checkpointReached) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) _checkNearbyCheckpoints(myPos);
+          });
+        }
         final screenH = MediaQuery.of(context).size.height;
         final panelHeight = (screenH * 0.46).clamp(260.0, 360.0).toDouble();
 
@@ -1256,13 +1276,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 if (_markMode) _buildCrosshair(screenH),
 
                 // ── Active navigation info bar ─────────────────────────────
-                if (_activeNavRoute != null)
+                if (_activeNavRoute != null) ...[
                   Positioned(
                     top: topPad + 52,
                     left: 0,
                     right: 0,
                     child: Center(child: _buildNavBar(myPos)),
                   ),
+                  // Checkpoint reached overlay
+                  if (_checkpointReached)
+                    Positioned(
+                      top: topPad + 100,
+                      left: 0,
+                      right: 0,
+                      child: Center(child: _buildCheckpointOverlay(myPos)),
+                    ),
+                ],
 
                 // ── Left tactical action column ────────────────────────────
                 Positioned(
@@ -1602,59 +1631,101 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         .toList();
   }
 
+  static const _enemyTypeIds = {'enemy_contact', 'enemy_vehicle', 'ied_suspected'};
+
   List<Marker> _buildMarkMarkers() {
     return _marks.map((m) {
-      return Marker(
-        point: m.position,
-        width: 44,
-        height: 56,
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: m.color.withValues(alpha: 0.18),
-                shape: BoxShape.circle,
-                border: Border.all(color: m.color, width: 2),
-                boxShadow: [
-                  BoxShadow(
-                    color: m.color.withValues(alpha: 0.5),
-                    blurRadius: 6,
-                    spreadRadius: 1,
-                  ),
-                ],
+      final isEnemy = _enemyTypeIds.contains(m.typeId);
+      final markerSize = isEnemy ? 48.0 : 36.0;
+
+      Widget markerWidget = Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: markerSize,
+            height: markerSize,
+            decoration: BoxDecoration(
+              color: isEnemy ? const Color(0xFFEF4444).withValues(alpha: 0.25) : m.color.withValues(alpha: 0.18),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isEnemy ? const Color(0xFFEF4444) : m.color,
+                width: isEnemy ? 3 : 2,
               ),
-              child: Center(
-                child: Text(
-                  m.symbol,
-                  style: TextStyle(
-                    color: m.color,
-                    fontSize: 16,
-                    fontWeight: FontWeight.bold,
-                  ),
+              boxShadow: [
+                BoxShadow(
+                  color: (isEnemy ? const Color(0xFFEF4444) : m.color).withValues(alpha: isEnemy ? 0.7 : 0.5),
+                  blurRadius: isEnemy ? 14 : 6,
+                  spreadRadius: isEnemy ? 3 : 1,
+                ),
+              ],
+            ),
+            child: Center(
+              child: Text(
+                m.symbol,
+                style: TextStyle(
+                  color: isEnemy ? Colors.white : m.color,
+                  fontSize: isEnemy ? 14 : 16,
+                  fontWeight: FontWeight.w900,
                 ),
               ),
             ),
+          ),
+          const SizedBox(height: 2),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+            decoration: BoxDecoration(
+              color: isEnemy ? const Color(0xFFEF4444) : m.color.withValues(alpha: 0.9),
+              borderRadius: BorderRadius.circular(4),
+              boxShadow: isEnemy ? [const BoxShadow(color: Color(0xFFEF4444), blurRadius: 4, spreadRadius: 0)] : null,
+            ),
+            child: Text(
+              m.label.split(' ').take(2).join(' '),
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: isEnemy ? 8 : 6.5,
+                fontWeight: isEnemy ? FontWeight.w900 : FontWeight.bold,
+                letterSpacing: isEnemy ? 0.5 : 0,
+              ),
+            ),
+          ),
+          // ENEMY label
+          if (isEnemy) ...[
             const SizedBox(height: 2),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
               decoration: BoxDecoration(
-                color: m.color.withValues(alpha: 0.9),
+                color: Colors.black.withValues(alpha: 0.8),
                 borderRadius: BorderRadius.circular(3),
+                border: Border.all(color: const Color(0xFFEF4444), width: 0.5),
               ),
-              child: Text(
-                m.label.split(' ').take(2).join(' '),
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 6.5,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: const Text(
+                '⚠ ENEMY',
+                style: TextStyle(color: Color(0xFFEF4444), fontSize: 7, fontWeight: FontWeight.w900, letterSpacing: 0.5),
               ),
             ),
           ],
-        ),
+        ],
+      );
+
+      // Wrap enemy marks in AnimatedBuilder for pulsing glow effect
+      if (isEnemy) {
+        markerWidget = AnimatedBuilder(
+          animation: _sosCtrl, // reuse SOS animation controller for pulsing
+          builder: (ctx, child) {
+            return Transform.scale(
+              scale: 0.95 + 0.05 * _sosCtrl.value,
+              child: child,
+            );
+          },
+          child: markerWidget,
+        );
+      }
+
+      return Marker(
+        point: m.position,
+        width: isEnemy ? 64 : 44,
+        height: isEnemy ? 80 : 56,
+        child: markerWidget,
       );
     }).toList();
   }
@@ -1874,6 +1945,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _activeFollowSession = session as Map<String, dynamic>?;
       _activeRouteRoad = roadPoints;
       _panelOpen = false;
+      // Reset checkpoint tracking
+      _currentWaypointIndex = 0;
+      _routePaused = false;
+      _checkpointReached = false;
+      _currentCheckpointLabel = null;
     });
     if (target != null && _mapReady) {
       _mapController.move(target, 14);
@@ -1893,6 +1969,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         _activeNavRoute = null;
         _navDestination = null;
         _activeRouteRoad = [];
+        _currentWaypointIndex = 0;
+        _routePaused = false;
+        _checkpointReached = false;
+        _currentCheckpointLabel = null;
       });
       _showSnack('Route follow stopped', color: DRDTheme.warningColor);
     }
@@ -2145,14 +2225,20 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          const Icon(Icons.navigation, color: Color(0xFF00E5FF), size: 14),
+          Icon(
+            _routePaused ? Icons.pause_circle_rounded : Icons.navigation,
+            color: _routePaused ? DRDTheme.warningColor : const Color(0xFF00E5FF),
+            size: 14,
+          ),
           const SizedBox(width: 6),
           Flexible(
             child: Text(
-              routeName,
+              _routePaused
+                  ? 'PAUSED — ${_currentCheckpointLabel ?? routeName}'
+                  : routeName,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                color: Color(0xFF00E5FF),
+              style: TextStyle(
+                color: _routePaused ? DRDTheme.warningColor : const Color(0xFF00E5FF),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 0.5,
@@ -2160,16 +2246,40 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             ),
           ),
           const SizedBox(width: 8),
-          Text(
-            distLabel,
-            style: const TextStyle(color: Colors.white70, fontSize: 11),
-          ),
+          if (_routePaused) ...[
+            GestureDetector(
+              onTap: _resumeFromCheckpoint,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: DRDTheme.successColor.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(6),
+                  border: Border.all(color: DRDTheme.successColor.withValues(alpha: 0.5)),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.play_arrow_rounded, color: DRDTheme.successColor, size: 12),
+                    SizedBox(width: 3),
+                    Text('RESUME', style: TextStyle(color: DRDTheme.successColor,
+                        fontSize: 9, fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                  ],
+                ),
+              ),
+            ),
+          ] else ...[
+            Text(distLabel, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+          ],
           const SizedBox(width: 8),
           GestureDetector(
             onTap: () => setState(() {
               _activeNavRoute = null;
               _navDestination = null;
               _activeRouteRoad = [];
+              _routePaused = false;
+              _checkpointReached = false;
+              _currentWaypointIndex = 0;
+              _currentCheckpointLabel = null;
             }),
             child: const Icon(Icons.close, color: Colors.white54, size: 14),
           ),
@@ -2238,14 +2348,27 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   Widget _buildHud(LocationProvider loc) {
+    final isDanger = !loc.isTracking || loc.batteryLevel < 20;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: DRDTheme.surfaceColor.withValues(alpha: 0.94),
+        color: isDanger
+            ? DRDTheme.dangerColor.withValues(alpha: 0.1)
+            : DRDTheme.surfaceColor.withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        border: Border.all(
+          color: isDanger
+              ? DRDTheme.dangerColor.withValues(alpha: 0.6)
+              : Colors.white.withValues(alpha: 0.07),
+          width: isDanger ? 1.5 : 1,
+        ),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          BoxShadow(
+            color: isDanger
+                ? DRDTheme.dangerColor.withValues(alpha: 0.3)
+                : Colors.black.withValues(alpha: 0.35),
+            blurRadius: isDanger ? 10 : 6,
+          ),
         ],
       ),
       child: Column(
@@ -2336,17 +2459,29 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Widget _buildTeamBadge() {
     final active = _teamLocations.where((l) => l['status'] == 'active').length;
     final stale = _teamLocations.where((l) => l['status'] == 'stale').length;
-    final offline = _teamLocations
-        .where((l) => l['status'] == 'offline')
-        .length;
+    final offline = _teamLocations.where((l) => l['status'] == 'offline').length;
+    final hasDanger = offline > 0;
+
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
       decoration: BoxDecoration(
-        color: DRDTheme.surfaceColor.withValues(alpha: 0.94),
+        color: hasDanger
+            ? DRDTheme.dangerColor.withValues(alpha: 0.1)
+            : DRDTheme.surfaceColor.withValues(alpha: 0.94),
         borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+        border: Border.all(
+          color: hasDanger
+              ? DRDTheme.dangerColor.withValues(alpha: 0.5)
+              : Colors.white.withValues(alpha: 0.07),
+          width: hasDanger ? 1.5 : 1,
+        ),
         boxShadow: [
-          BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+          BoxShadow(
+            color: hasDanger
+                ? DRDTheme.dangerColor.withValues(alpha: 0.25)
+                : Colors.black.withValues(alpha: 0.35),
+            blurRadius: 6,
+          ),
         ],
       ),
       child: Column(
@@ -2355,32 +2490,34 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         children: [
           Text(
             'UNIT  ${_teamLocations.length}',
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 11,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.8,
-            ),
+            style: const TextStyle(color: Colors.white, fontSize: 11,
+                fontWeight: FontWeight.bold, letterSpacing: 0.8),
           ),
           const SizedBox(height: 4),
           _badgeRow(DRDTheme.successColor, 'ACT', active),
           _badgeRow(DRDTheme.warningColor, 'STL', stale),
-          _badgeRow(DRDTheme.dangerColor, 'OFF', offline),
+          _badgeRow(DRDTheme.dangerColor, 'OFF', offline, bold: hasDanger),
         ],
       ),
     );
   }
 
-  Widget _badgeRow(Color color, String label, int count) {
+  Widget _badgeRow(Color color, String label, int count, {bool bold = false}) {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (bold && count > 0)
+          Padding(
+            padding: const EdgeInsets.only(right: 3),
+            child: Icon(Icons.warning_amber_rounded, color: color, size: 10),
+          ),
         Text(
           label,
           style: TextStyle(
-            color: Colors.white38,
-            fontSize: 9,
+            color: bold && count > 0 ? color : Colors.white38,
+            fontSize: bold && count > 0 ? 10 : 9,
             letterSpacing: 0.8,
+            fontWeight: bold && count > 0 ? FontWeight.w800 : FontWeight.normal,
           ),
         ),
         const SizedBox(width: 4),
@@ -2388,8 +2525,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           '$count',
           style: TextStyle(
             color: color,
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
+            fontSize: bold && count > 0 ? 12 : 10,
+            fontWeight: bold && count > 0 ? FontWeight.w900 : FontWeight.bold,
           ),
         ),
       ],
@@ -2617,6 +2754,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
+        // Live feed button
+        _actionBtn(
+          icon: Icons.videocam_rounded,
+          label: 'LIVE',
+          color: const Color(0xFFEF4444),
+          solid: true,
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const LiveFeedScreen()),
+          ),
+        ),
+        const SizedBox(height: 6),
         _actionBtn(
           icon: _markMode ? Icons.close : Icons.push_pin_outlined,
           label: _markMode ? 'CANCEL' : 'MARK',
@@ -2643,7 +2792,6 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           onTap: _showRoutesSheet,
         ),
         const SizedBox(height: 14),
-        // Logout button
         _actionBtn(
           icon: Icons.logout_rounded,
           label: 'EXIT',
@@ -2652,6 +2800,143 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           onTap: _handleLogout,
         ),
       ],
+    );
+  }
+
+  // ── Checkpoint pause / resume ─────────────────────────────────────────────
+
+  void _checkNearbyCheckpoints(LatLng myPos) {
+    if (_activeNavRoute == null || _routePaused) return;
+    final wps = (_activeNavRoute!['waypoints'] as List?)
+        ?.cast<Map<String, dynamic>>() ?? [];
+    if (wps.isEmpty) return;
+
+    // Check every intermediate waypoint (skip last — that's the final destination)
+    for (int i = _currentWaypointIndex; i < wps.length - 1; i++) {
+      final lat = (wps[i]['latitude'] as num?)?.toDouble();
+      final lng = (wps[i]['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final dist = (_distanceKm(myPos.latitude, myPos.longitude, lat, lng) ?? double.infinity) * 1000;
+      if (dist <= 60) {
+        setState(() {
+          _currentWaypointIndex = i;
+          _checkpointReached = true;
+          _currentCheckpointLabel = wps[i]['label'] as String? ?? 'Waypoint ${i + 1}';
+        });
+        return;
+      }
+    }
+  }
+
+  void _pauseAtCheckpoint() {
+    setState(() {
+      _routePaused = true;
+      _checkpointReached = false;
+    });
+    _showSnack('Paused at $_currentCheckpointLabel', color: DRDTheme.warningColor);
+  }
+
+  void _resumeFromCheckpoint() {
+    setState(() {
+      _routePaused = false;
+      _checkpointReached = false;
+      _currentWaypointIndex++;
+    });
+    _showSnack('Resuming route…', color: DRDTheme.successColor);
+  }
+
+  Widget _buildCheckpointOverlay(LatLng myPos) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 24),
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0F1C2E),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16)],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: DRDTheme.warningColor.withValues(alpha: 0.15),
+                ),
+                child: const Icon(Icons.flag_rounded, color: DRDTheme.warningColor, size: 16),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('CHECKPOINT REACHED',
+                        style: TextStyle(color: DRDTheme.warningColor, fontSize: 9,
+                            fontWeight: FontWeight.w800, letterSpacing: 1.5, fontFamily: 'Poppins')),
+                    const SizedBox(height: 2),
+                    Text(_currentCheckpointLabel ?? 'Waypoint',
+                        style: const TextStyle(color: Colors.white, fontSize: 13,
+                            fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: _pauseAtCheckpoint,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: DRDTheme.warningColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.pause_rounded, color: DRDTheme.warningColor, size: 16),
+                        SizedBox(width: 6),
+                        Text('PAUSE', style: TextStyle(color: DRDTheme.warningColor, fontSize: 11,
+                            fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: GestureDetector(
+                  onTap: _resumeFromCheckpoint,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                    decoration: BoxDecoration(
+                      color: DRDTheme.successColor.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: DRDTheme.successColor.withValues(alpha: 0.5)),
+                    ),
+                    child: const Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.play_arrow_rounded, color: DRDTheme.successColor, size: 16),
+                        SizedBox(width: 6),
+                        Text('CONTINUE', style: TextStyle(color: DRDTheme.successColor, fontSize: 11,
+                            fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
     );
   }
 

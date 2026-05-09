@@ -33,7 +33,7 @@ import { BiTargetLock } from "react-icons/bi";
 import { TbRoute, TbBuildingHospital } from "react-icons/tb";
 import "leaflet-routing-machine";
 import * as api from "../services/api";
-import { connectAll, disconnectAll, locationWS, messageWS, eventWS } from "../services/ws";
+import { connectAll, disconnectAll, locationWS, messageWS, eventWS, videoAlertWS } from "../services/ws";
 
 // ─────────────────────────── TYPES ───────────────────────────
 type Status = "active" | "stale" | "offline";
@@ -67,6 +67,15 @@ interface Route {
   routeStatus?: string;
   route_status?: string;
   activeFollowCount?: number;
+  vertexSoldiers?: Record<number, string>; // waypoint index → user_id
+}
+
+// Sort 2-D points in clockwise angular order from centroid so the polygon has no crossing lines.
+function sortConvexOrder(coords: [number, number][]): [number, number][] {
+  if (coords.length < 3) return coords;
+  const cx = coords.reduce((s, c) => s + c[0], 0) / coords.length;
+  const cy = coords.reduce((s, c) => s + c[1], 0) / coords.length;
+  return [...coords].sort((a, b) => Math.atan2(a[1] - cy, a[0] - cx) - Math.atan2(b[1] - cy, b[0] - cx));
 }
 
 interface RouteHistoryItem extends Route {
@@ -332,29 +341,38 @@ function getTacticalShapeSVG(shape: TacticalShape, color: string, size: number =
 
 function createUserMarkerHTML(user: User, isSelected: boolean): string {
   const col = TEAM_COLORS[user.group].primary;
-  const size = isSelected ? 40 : 32;
+  const size = isSelected ? 42 : 32;
   const roleIcon = user.role ? ROLE_ICONS[user.role] || "" : "";
+  const isDanger = user.status === "offline" || user.flag === "help";
+  const isStale = user.status === "stale";
+  const borderColor = isDanger ? "#ef4444" : isStale ? "#f59e0b" : col;
+  const bgColor = isDanger ? "rgba(239,68,68,0.15)" : isStale ? "rgba(245,158,11,0.12)" : TEAM_COLORS[user.group].bg;
+  const textColor = isDanger ? "#ef4444" : isStale ? "#f59e0b" : col;
+  const shadow = isDanger
+    ? `0 0 10px rgba(239,68,68,0.5), 0 2px 8px rgba(0,0,0,0.4)`
+    : isStale ? `0 0 8px rgba(245,158,11,0.35), 0 2px 6px rgba(0,0,0,0.4)` : "0 2px 8px rgba(0,0,0,0.4)";
 
   return `
     <div style="
       width: ${size}px;
       height: ${size}px;
       border-radius: 50%;
-      background: ${user.status === "offline" ? "rgba(30,41,59,0.9)" : TEAM_COLORS[user.group].bg};
-      border: ${user.status === "stale" ? 3 : 2}px ${user.status === "stale" ? "dashed" : "solid"} ${user.status === "offline" ? "#ef4444" : col};
+      background: ${bgColor};
+      border: ${isDanger || isStale ? 3 : 2}px ${isStale && !isDanger ? "dashed" : "solid"} ${borderColor};
       display: flex;
       align-items: center;
       justify-content: center;
-      font-size: ${isSelected ? 12 : 10}px;
-      font-weight: 700;
-      color: ${user.status === "offline" ? "#94a3b8" : col};
+      font-size: ${isSelected ? 13 : 10}px;
+      font-weight: ${isDanger ? 900 : 700};
+      color: ${textColor};
       font-family: 'Poppins', sans-serif;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+      box-shadow: ${shadow};
       position: relative;
     ">
       ${user.name.replace(" ", "").substring(0, 2).toUpperCase()}
-      ${user.flag ? `<div style="position: absolute; top: -4px; right: -4px; width: 14px; height: 14px; border-radius: 50%; background: ${FLAG_COLORS[user.flag].color}; border: 2px solid #0a162e; font-size: 8px; display: flex; align-items: center; justify-content: center; color: white;">!</div>` : ""}
-      ${roleIcon ? `<div style="position: absolute; bottom: -4px; right: -4px; width: 14px; height: 14px; border-radius: 50%; background: ${col}; border: 2px solid #0a162e; font-size: 8px; display: flex; align-items: center; justify-content: center; color: white;">${roleIcon}</div>` : ""}
+      ${user.flag === "help" ? `<div style="position:absolute;top:-5px;right:-5px;width:16px;height:16px;border-radius:50%;background:#ef4444;border:2px solid #0a162e;font-size:9px;font-weight:900;display:flex;align-items:center;justify-content:center;color:white;animation:pulse 1s infinite;">!</div>` : user.flag ? `<div style="position: absolute; top: -4px; right: -4px; width: 14px; height: 14px; border-radius: 50%; background: ${FLAG_COLORS[user.flag].color}; border: 2px solid #0a162e; font-size: 8px; display: flex; align-items: center; justify-content: center; color: white;">!</div>` : ""}
+      ${isDanger ? `<div style="position:absolute;bottom:-6px;left:50%;transform:translateX(-50%);background:#ef4444;color:white;font-size:7px;font-weight:900;padding:1px 4px;border-radius:3px;white-space:nowrap;letter-spacing:0.5px;">${user.status === "offline" ? "OFFLINE" : "SOS"}</div>` : ""}
+      ${roleIcon && !isDanger ? `<div style="position: absolute; bottom: -4px; right: -4px; width: 14px; height: 14px; border-radius: 50%; background: ${col}; border: 2px solid #0a162e; font-size: 8px; display: flex; align-items: center; justify-content: center; color: white;">${roleIcon}</div>` : ""}
     </div>
   `;
 }
@@ -535,6 +553,8 @@ function TopBar({
   isConnected,
   onLogout,
   currentUser,
+  liveFeedCount,
+  onToggleLiveGrid,
 }: {
   users: User[];
   sidebarOpen: boolean;
@@ -542,6 +562,8 @@ function TopBar({
   isConnected: boolean;
   onLogout: () => void;
   currentUser: { username?: string; full_name?: string; email?: string; role?: string } | null;
+  liveFeedCount: number;
+  onToggleLiveGrid: () => void;
 }) {
   const active = users.filter(u => u.status === "active").length;
   const stale = users.filter(u => u.status === "stale").length;
@@ -589,6 +611,18 @@ function TopBar({
           <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: isConnected ? "#22c55e" : "#f59e0b" }} />
           <span className="text-slate-500 font-semibold tracking-wider">{isConnected ? "LIVE" : "DEMO"}</span>
         </div>
+
+        {/* Active live feeds alert */}
+        {liveFeedCount > 0 && (
+          <button
+            onClick={onToggleLiveGrid}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg font-semibold animate-pulse"
+            style={{ backgroundColor: "rgba(239,68,68,0.2)", border: "1px solid rgba(239,68,68,0.4)", color: "#ef4444", fontSize: 11 }}
+          >
+            <span className="w-2 h-2 rounded-full bg-red-500" />
+            {liveFeedCount} LIVE
+          </button>
+        )}
 
         {/* Profile button */}
         <button
@@ -945,25 +979,57 @@ function AlertsPanel({
     return result;
   }, [users]);
 
+  const hasHighAlerts = alerts.some(a => a.severity === "high");
+
   return (
-    <div className="bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden">
-      <PanelHeader title="Alerts" icon={<FiBell size={13} />} expanded={expanded} onToggle={onToggle} badge={alerts.length} />
+    <div
+      className="rounded-lg overflow-hidden"
+      style={{
+        background: hasHighAlerts ? "rgba(239,68,68,0.08)" : "rgba(15,23,42,0.95)",
+        border: hasHighAlerts ? "1px solid rgba(239,68,68,0.35)" : "1px solid rgba(255,255,255,0.1)",
+      }}
+    >
+      <PanelHeader
+        title={hasHighAlerts ? "⚠ ALERTS" : "Alerts"}
+        icon={<FiBell size={13} color={hasHighAlerts ? "#ef4444" : undefined} />}
+        expanded={expanded}
+        onToggle={onToggle}
+        badge={alerts.length}
+      />
       {expanded && (
         <div className="max-h-52 overflow-y-auto custom-scrollbar">
           {alerts.length === 0 ? (
             <div className="p-4 text-slate-500 text-[11px] text-center">No active alerts</div>
-          ) : alerts.map((a, i) => (
-            <div key={i} className="px-2.5 py-2 border-b border-white/5 flex items-start gap-2 hover:bg-white/5 transition-colors cursor-pointer" onClick={() => onAlertClick?.(a.user)}>
-              <FiAlertTriangle size={11} color={a.severity === "high" ? "#ef4444" : "#f59e0b"} className="mt-0.5 flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="text-foreground text-[11px] font-semibold truncate">{a.msg}</div>
-                <div className="text-slate-500 text-[9px] mt-0.5 truncate">{a.user.message}</div>
+          ) : alerts.map((a, i) => {
+            const isHigh = a.severity === "high";
+            return (
+              <div
+                key={i}
+                className="px-2.5 py-2.5 border-b border-white/5 flex items-start gap-2 cursor-pointer transition-colors"
+                style={{ backgroundColor: isHigh ? "rgba(239,68,68,0.07)" : "rgba(245,158,11,0.05)" }}
+                onClick={() => onAlertClick?.(a.user)}
+              >
+                <FiAlertTriangle size={13} color={isHigh ? "#ef4444" : "#f59e0b"} className="mt-0.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <div
+                    className="text-[12px] font-bold truncate"
+                    style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}
+                  >
+                    {a.msg}
+                  </div>
+                  <div className="text-[9px] mt-0.5 truncate" style={{ color: isHigh ? "#fca5a5" : "#fde68a" }}>
+                    {a.user.group} · {a.user.message}
+                  </div>
+                </div>
+                <span
+                  className="text-[10px] font-black shrink-0 tracking-wide"
+                  style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}
+                >
+                  {a.elapsed}
+                </span>
               </div>
-              <span className="text-[10px] font-bold flex-shrink-0" style={{ color: a.severity === "high" ? "#ef4444" : "#f59e0b" }}>
-                {a.elapsed}
-              </span>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -1364,17 +1430,35 @@ function EventsLog({ events, onViewAll }: { events: Event[]; onViewAll: () => vo
           <tbody>
             {[...events].reverse().slice(0, 20).map(ev => {
               const ts = typeStyle[ev.type] || { color: "#94a3b8", bg: "transparent" };
+              const isDangerRow = ev.type === "OFFLINE" || ev.type === "ALERT" || ev.type === "FLAG";
               return (
-                <tr key={ev.id} className="border-b border-white/3 hover:bg-white/5 transition-colors">
+                <tr
+                  key={ev.id}
+                  className="border-b border-white/3 hover:opacity-90 transition-colors"
+                  style={{ backgroundColor: isDangerRow ? "rgba(239,68,68,0.06)" : "transparent" }}
+                >
                   <td className="px-1.5 md:px-2 py-1 md:py-1.5 text-slate-500 whitespace-nowrap">{formatTime(ev.time)}</td>
                   <td className="px-1.5 md:px-2 py-1 md:py-1.5">
-                    <span className="px-1 py-0.5 rounded text-[8px] md:text-[9px] font-bold whitespace-nowrap" style={{ backgroundColor: ts.bg, color: ts.color }}>
+                    <span
+                      className="px-1 py-0.5 rounded text-[8px] md:text-[9px] font-bold whitespace-nowrap"
+                      style={{ backgroundColor: ts.bg, color: ts.color, fontWeight: isDangerRow ? 900 : 700 }}
+                    >
                       {ev.type}
                     </span>
                   </td>
-                  <td className="px-1.5 md:px-2 py-1 md:py-1.5 text-foreground font-semibold whitespace-nowrap">{ev.user}</td>
+                  <td
+                    className="px-1.5 md:px-2 py-1 md:py-1.5 whitespace-nowrap"
+                    style={{ color: isDangerRow ? "#ef4444" : "#e2e8f0", fontWeight: isDangerRow ? 700 : 600 }}
+                  >
+                    {ev.user}
+                  </td>
                   <td className="px-1.5 md:px-2 py-1 md:py-1.5 whitespace-nowrap truncate max-w-[60px]" style={{ color: TEAM_COLORS[ev.team].primary }}>{ev.team}</td>
-                  <td className="px-1.5 md:px-2 py-1 md:py-1.5 text-slate-400 truncate max-w-[100px]">{ev.event}</td>
+                  <td
+                    className="px-1.5 md:px-2 py-1 md:py-1.5 truncate max-w-[100px]"
+                    style={{ color: isDangerRow ? "#fca5a5" : "#94a3b8", fontWeight: isDangerRow ? 600 : 400 }}
+                  >
+                    {ev.event}
+                  </td>
                 </tr>
               );
             })}
@@ -1804,7 +1888,7 @@ function RouteModal({
   pendingRoute: Waypoint[];
   users: User[];
   dbTeams: TeamInfo[];
-  onAssign: (name: string, assignedTo: string, assignedTeam: string, meetingPoint: boolean, visibleTo: string[], isZone: boolean, zoneType: Route["zoneType"]) => void;
+  onAssign: (name: string, assignedTo: string, assignedTeam: string, meetingPoint: boolean, visibleTo: string[], isZone: boolean, zoneType: Route["zoneType"], vertexSoldiers?: Record<number, string>) => void;
   onCancel: () => void;
 }) {
   const [name, setName] = useState("Route Alpha");
@@ -1815,6 +1899,7 @@ function RouteModal({
   const [isZone, setIsZone] = useState(false);
   const [zoneType, setZoneType] = useState<Route["zoneType"]>("perimeter");
   const [meetingTeams, setMeetingTeams] = useState<string[]>([]);
+  const [vertexSoldiers, setVertexSoldiers] = useState<Record<number, string>>({});
 
   const zoneTypes: Route["zoneType"][] = ["perimeter", "sector", "corridor", "extraction"];
 
@@ -1999,12 +2084,53 @@ function RouteModal({
           </div>
         )}
 
+        {/* Zone vertex soldier assignment */}
+        {isZone && pendingRoute.length > 0 && (
+          <div className="mb-4">
+            <div className="text-slate-400 text-[11px] mb-2 font-semibold">ASSIGN SOLDIERS TO ZONE POINTS</div>
+            <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto custom-scrollbar">
+              {pendingRoute.map((wp, idx) => {
+                const assigned = vertexSoldiers[idx];
+                const soldier = assigned ? users.find(u => u.user_id === assigned) : null;
+                return (
+                  <div key={idx} className="flex items-center gap-2 p-2 rounded-lg" style={{ background: "rgba(30,41,59,0.5)", border: "1px solid rgba(255,255,255,0.06)" }}>
+                    <div className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold"
+                      style={{ background: "rgba(236,72,153,0.2)", border: "1.5px solid rgba(236,72,153,0.5)", color: "#ec4899" }}>
+                      {idx + 1}
+                    </div>
+                    <span className="text-slate-400 text-[10px] shrink-0">{wp.label || `Point ${idx + 1}`}</span>
+                    <select
+                      value={assigned ?? ""}
+                      onChange={e => {
+                        const v = e.target.value;
+                        setVertexSoldiers(prev => v ? { ...prev, [idx]: v } : Object.fromEntries(Object.entries(prev).filter(([k]) => Number(k) !== idx)));
+                      }}
+                      className="flex-1 bg-slate-800 border border-white/10 rounded px-2 py-1 text-foreground text-[10px] min-w-0"
+                    >
+                      <option value="">— Assign soldier —</option>
+                      {users.filter(u => u.status !== "offline").map(u => (
+                        <option key={u.user_id} value={u.user_id}>{u.name} ({u.group.replace(/^Team\s+/i, "")})</option>
+                      ))}
+                    </select>
+                    {soldier && (
+                      <div className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold"
+                        style={{ background: `${TEAM_COLORS[soldier.group]?.bg ?? "rgba(59,130,246,0.15)"}`, border: `1.5px solid ${TEAM_COLORS[soldier.group]?.primary ?? "#3b82f6"}`, color: TEAM_COLORS[soldier.group]?.primary ?? "#3b82f6" }}>
+                        {soldier.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="flex gap-2">
           <button onClick={onCancel} className="flex-1 px-3 py-2.5 bg-slate-800 border border-white/10 rounded-md text-slate-400 cursor-pointer text-xs font-medium hover:bg-slate-700">
             Cancel
           </button>
           <button
-            onClick={() => onAssign(name, assignedTo, assignedTeam, meetingPoint, visibleTo, isZone, isZone ? zoneType : undefined)}
+            onClick={() => onAssign(name, assignedTo, assignedTeam, meetingPoint, visibleTo, isZone, isZone ? zoneType : undefined, isZone ? vertexSoldiers : undefined)}
             className="flex-1 px-4 py-2.5 bg-primary border-none rounded-md text-white cursor-pointer text-xs font-semibold hover:opacity-90"
           >
             <FiCheck size={12} className="inline mr-1" />
@@ -2544,7 +2670,7 @@ function AllEventsModal({ onClose }: { onClose: () => void }) {
           id: String(e.id),
           time: new Date(e.created_at),
           type: (e.event_type ?? "UPDATE").toUpperCase() as Event["type"],
-          user: e.user_id ? String(e.user_id).slice(0, 8) : "System",
+          user: e.user_id ? (usersInfoRef.current.get(String(e.user_id))?.name ?? "System") : "System",
           team: "Team Alpha" as Team,
           event: e.description ?? "",
           location: e.location_lat != null
@@ -2670,6 +2796,213 @@ function AllEventsModal({ onClose }: { onClose: () => void }) {
             Next <FiChevronRight size={11} />
           </button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── LIVE FEED ALERT TOAST ───────────────────────────────────
+
+function LiveFeedAlertToast({
+  alert,
+  onView,
+  onIgnore,
+}: {
+  alert: { room_id: string; user_name: string; team_name: string; lat?: number; lng?: number };
+  onView: () => void;
+  onIgnore: () => void;
+}) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setElapsed(s => s + 1), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div
+      className="fixed bottom-6 right-6 z-[7000] rounded-2xl shadow-2xl overflow-hidden"
+      style={{ width: 320, background: "#0a1628", border: "2px solid rgba(239,68,68,0.6)", boxShadow: "0 0 30px rgba(239,68,68,0.4), 0 20px 50px rgba(0,0,0,0.6)" }}
+    >
+      {/* Red pulsing top bar */}
+      <div className="h-1.5 bg-red-500 animate-pulse" />
+
+      <div className="p-4">
+        <div className="flex items-start gap-3 mb-4">
+          {/* Pulsing live indicator */}
+          <div className="relative shrink-0 mt-0.5">
+            <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(239,68,68,0.2)", border: "2px solid #ef4444" }}>
+              <FiBell size={18} color="#ef4444" />
+            </div>
+            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-red-500 flex items-center justify-center">
+              <span className="w-2.5 h-2.5 rounded-full bg-white animate-ping absolute" />
+              <span className="w-2 h-2 rounded-full bg-white" />
+            </span>
+          </div>
+
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] font-bold tracking-widest text-red-400 mb-0.5">LIVE FEED REQUEST</div>
+            <div className="text-white font-bold text-base leading-tight truncate">{alert.user_name}</div>
+            <div className="text-slate-400 text-xs mt-0.5">
+              {alert.team_name}
+              {alert.lat && <span className="ml-1 text-slate-500">· {alert.lat.toFixed(3)}, {alert.lng?.toFixed(3)}</span>}
+            </div>
+          </div>
+
+          <div className="text-red-400 text-xs font-bold shrink-0">{elapsed}s</div>
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={onView}
+            className="flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wide text-white flex items-center justify-center gap-1.5"
+            style={{ background: "#2563eb", border: "none", cursor: "pointer" }}
+          >
+            <FiActivity size={13} /> VIEW LIVE
+          </button>
+          <button
+            onClick={onIgnore}
+            className="flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wide flex items-center justify-center gap-1.5"
+            style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", cursor: "pointer" }}
+          >
+            <FiX size={13} /> IGNORE
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────── LIVE FEED GRID ───────────────────────────────────
+
+interface LiveFeed {
+  room_id: string;
+  user_id: string;
+  user_name: string;
+  team_name: string;
+  lat?: number;
+  lng?: number;
+  stream?: MediaStream;
+  pc?: RTCPeerConnection;
+  muted?: boolean;
+}
+
+const STUN = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }] };
+const BASE_WS = (() => {
+  const url = (import.meta.env.VITE_API_URL as string) || "https://drd.nexventures.net/";
+  return url.replace(/^https/, "wss").replace(/^http/, "ws").replace(/\/$/, "");
+})();
+
+function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, users }:
+  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; users: User[] }) {
+  const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+
+  // Helper: register a video element and immediately attach any available stream
+  const setVideoRef = (roomId: string, el: HTMLVideoElement | null, stream?: MediaStream) => {
+    if (!el) return;
+    videoRefs.current.set(roomId, el);
+    const src = stream ?? feeds.find(f => f.room_id === roomId)?.stream;
+    if (src && el.srcObject !== src) {
+      el.srcObject = src;
+      el.play().catch(() => { /* autoplay blocked — user interaction required */ });
+    }
+  };
+
+  // Also re-sync streams whenever feeds list updates (handles deferred track arrival)
+  useEffect(() => {
+    feeds.forEach(f => {
+      if (f.stream) {
+        const el = videoRefs.current.get(f.room_id);
+        if (el && el.srcObject !== f.stream) {
+          el.srcObject = f.stream;
+          el.play().catch(() => {});
+        }
+      }
+    });
+  }, [feeds]);
+
+  if (feeds.length === 0) return null;
+  const main = feeds[activeIndex] ?? feeds[0];
+  const sides = feeds.filter((_, i) => i !== activeIndex);
+
+  return (
+    <div className="fixed inset-0 bg-black z-[6000] flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
+      {/* Header */}
+      <div className="flex items-center gap-3 px-4 py-3 bg-black/80 border-b border-white/10">
+        <span className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+          LIVE FEEDS — {feeds.length}
+        </span>
+        <span className="text-white/60 text-xs">{main.user_name} · {main.team_name}</span>
+        <div className="flex-1" />
+        <button onClick={() => onInvite(main.room_id)} className="px-3 py-1.5 rounded text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+          <FiUsers size={12} className="inline mr-1" /> Invite
+        </button>
+        <button onClick={() => onClose("ALL")} className="px-3 py-1.5 rounded text-xs font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors">
+          <FiX size={12} className="inline mr-1" /> Close All
+        </button>
+      </div>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Main feed */}
+        <div className="flex-1 relative bg-slate-950">
+          <video
+            ref={el => setVideoRef(main.room_id, el, main.stream)}
+            autoPlay playsInline
+            className="w-full h-full object-cover"
+          />
+          {/* Main feed overlay */}
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent flex items-end justify-between">
+            <div>
+              <div className="text-white font-bold text-sm">{main.user_name}</div>
+              <div className="text-white/60 text-xs">{main.team_name}
+                {main.lat && <span className="ml-2">· {main.lat.toFixed(4)}, {main.lng?.toFixed(4)}</span>}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => onMute(main.room_id)}
+                className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
+                style={{ background: main.muted ? "rgba(239,68,68,0.3)" : "rgba(255,255,255,0.15)" }}
+                title={main.muted ? "Unmute" : "Mute"}
+              >
+                {main.muted ? <FiAlertCircle size={16} color="#ef4444" /> : <FiActivity size={16} color="white" />}
+              </button>
+              <button onClick={() => onClose(main.room_id)} className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/30 hover:bg-red-500/50 transition-colors">
+                <FiX size={16} color="white" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Side feeds grid */}
+        {sides.length > 0 && (
+          <div className="w-52 flex flex-col gap-1 p-1 bg-slate-950 overflow-y-auto custom-scrollbar">
+            {sides.map((feed, idx) => {
+              const realIdx = feeds.indexOf(feed);
+              return (
+                <div key={feed.room_id} className="relative rounded overflow-hidden cursor-pointer border-2 border-transparent hover:border-blue-500/60 transition-colors aspect-video"
+                  onClick={() => onSetActive(realIdx)}>
+                  <video
+                    ref={el => setVideoRef(feed.room_id, el, feed.stream)}
+                    autoPlay playsInline muted
+                    className="w-full h-full object-cover"
+                  />
+                  <div className="absolute bottom-0 left-0 right-0 px-2 py-1 bg-black/60 flex items-center justify-between">
+                    <span className="text-white text-[9px] font-semibold truncate">{feed.user_name}</span>
+                    <button onClick={e => { e.stopPropagation(); onMute(feed.room_id); }}
+                      className="ml-1 shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-white/10">
+                      {feed.muted ? <FiAlertCircle size={10} color="#ef4444" /> : <FiActivity size={10} color="white" />}
+                    </button>
+                  </div>
+                  <div className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[8px] font-bold"
+                    style={{ background: TEAM_COLORS[feed.team_name as Team]?.bg ?? "rgba(59,130,246,0.3)", color: TEAM_COLORS[feed.team_name as Team]?.primary ?? "#3b82f6" }}>
+                    {feed.team_name.replace(/^Team\s+/i, "")}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2804,6 +3137,11 @@ export default function DODMap() {
   const [showAssignPicker, setShowAssignPicker] = useState(false);
   const [currentUserRole, setCurrentUserRole] = useState<any>(null);
   const [currentUser, setCurrentUser] = useState<{ username?: string; full_name?: string; email?: string; role?: string } | null>(null);
+  const [liveFeeds, setLiveFeeds] = useState<LiveFeed[]>([]);
+  const [activeFeedIndex, setActiveFeedIndex] = useState(0);
+  const [showLiveGrid, setShowLiveGrid] = useState(false);
+  const [pendingLiveAlert, setPendingLiveAlert] = useState<{ room_id: string; user_name: string; team_name: string; lat?: number; lng?: number } | null>(null);
+  const liveWsRefs = useRef<Map<string, WebSocket>>(new Map());
   const [mapFlyTarget, setMapFlyTarget] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedPOIType, setSelectedPOIType] = useState<POIType>("checkpoint");
   const [pendingPOI, setPendingPOI] = useState<POI | null>(null);
@@ -2990,17 +3328,26 @@ export default function DODMap() {
 
       // Locations → users (show real data; empty = no units deployed yet)
       if (locsRes.status === "fulfilled") {
+        const seenUserIds = new Set<string>();
         const frontendUsers: User[] = (locsRes.value.data as Array<{
           user_id: string; team_id: string; latitude: number; longitude: number;
           status: string; recorded_at: string; speed?: number; heading?: number;
-        }>).map(loc => {
-          const uInfo = usersInfo.get(String(loc.user_id)) ?? { name: String(loc.user_id).slice(0, 8) };
+        }>).reduce<User[]>((acc, loc) => {
+          const userId = String(loc.user_id);
+          // Skip duplicates (same user_id appearing multiple times)
+          if (seenUserIds.has(userId)) return acc;
+          seenUserIds.add(userId);
+
+          // Skip users we don't have info for — no real name = not in our system
+          const uInfo = usersInfo.get(userId);
+          if (!uInfo?.name) return acc;
+
           const teamName = teamsMap.get(String(loc.team_id)) ?? "Team Alpha";
           const validTeam: Team = (Object.keys(TEAM_COLORS) as Team[]).includes(teamName as Team)
             ? (teamName as Team)
             : "Team Alpha";
-          return {
-            user_id: String(loc.user_id),
+          acc.push({
+            user_id: userId,
             name: uInfo.name,
             group: validTeam,
             lat: loc.latitude,
@@ -3012,8 +3359,9 @@ export default function DODMap() {
             heading: loc.heading ?? 0,
             flag: null,
             role: uInfo.role as User["role"] | undefined,
-          };
-        });
+          });
+          return acc;
+        }, []);
 
         // Add offline field units with their last known location
         if (allUsersRes.status === "fulfilled") {
@@ -3423,6 +3771,138 @@ export default function DODMap() {
     return () => { unsubLoc(); unsubMsg(); unsubEvt(); };
   }, [isConnected, refreshRoutesAndPois, openSOSIncident]);
 
+  // Live feed alert subscription — receive alerts when field soldiers go live
+  useEffect(() => {
+    if (!isConnected) return;
+    const token = localStorage.getItem("access_token");
+    if (!token) return;
+
+    // Tell the video WS we're a watcher
+    videoAlertWS.send({ type: "watch_alerts" });
+
+    const unsubVideo = videoAlertWS.subscribe((msg: unknown) => {
+      const m = msg as { type?: string; room_id?: string; user_id?: string; user_name?: string; team_name?: string; lat?: number; lng?: number; feeds?: LiveFeed[] };
+      if (m.type === "live_alert" && m.room_id) {
+        // Show commander alert immediately (don't auto-join — let commander decide)
+        setPendingLiveAlert({
+          room_id: m.room_id!,
+          user_name: m.user_name ?? "Field Unit",
+          team_name: m.team_name ?? "",
+          lat: m.lat,
+          lng: m.lng,
+        });
+        setEvents(prev => [{
+          id: `live_${Date.now()}`, time: new Date(), type: "ALERT",
+          user: m.user_name ?? "Field Unit", team: (m.team_name as Team) ?? "Team Alpha",
+          event: `${m.user_name} is requesting LIVE FEED`, location: m.lat ? `${Number(m.lat).toFixed(4)}, ${Number(m.lng).toFixed(4)}` : "Field",
+        }, ...prev]);
+      } else if (m.type === "feed_ended" && m.room_id) {
+        _closeLiveFeed(m.room_id);
+      } else if (m.type === "active_feeds" && m.feeds) {
+        m.feeds.forEach(f => _joinLiveFeed(f, token));
+        if (m.feeds.length > 0) setShowLiveGrid(true);
+      }
+    });
+
+    return () => unsubVideo();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isConnected]);
+
+  const _joinLiveFeed = useCallback((meta: { room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number }, token: string) => {
+    if (liveWsRefs.current.has(meta.room_id)) return; // already joined
+    const wsUrl = `${BASE_WS}/ws/video/${meta.room_id}?token=${token}`;
+    const ws = new WebSocket(wsUrl);
+    liveWsRefs.current.set(meta.room_id, ws);
+
+    const pc = new RTCPeerConnection(STUN);
+
+    // Explicitly declare receive-only transceivers so the peer connection knows
+    // we expect incoming video/audio without sending our own streams.
+    pc.addTransceiver("video", { direction: "recvonly" });
+    pc.addTransceiver("audio", { direction: "recvonly" });
+
+    const newFeed: LiveFeed = { ...meta, pc, muted: false };
+
+    pc.ontrack = (e) => {
+      // eslint-disable-next-line no-console
+      console.log("[DRD WebRTC] ontrack fired, streams:", e.streams.length);
+      if (e.streams[0]) {
+        setLiveFeeds(prev => prev.map(f => f.room_id === meta.room_id ? { ...f, stream: e.streams[0] } : f));
+      }
+    };
+
+    pc.onicecandidate = (e) => {
+      if (e.candidate) ws.send(JSON.stringify({ type: "ice", room_id: meta.room_id, from_id: "commander", candidate: e.candidate.toJSON() }));
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      // eslint-disable-next-line no-console
+      console.log("[DRD WebRTC] ICE state →", pc.iceConnectionState, "| room:", meta.room_id);
+    };
+
+    pc.onconnectionstatechange = () => {
+      // eslint-disable-next-line no-console
+      console.log("[DRD WebRTC] Connection state →", pc.connectionState);
+    };
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ type: "join", room_id: meta.room_id, user_id: "commander", user_name: "Commander", team_name: "Command" }));
+    };
+
+    ws.onmessage = async (ev) => {
+      const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
+      // eslint-disable-next-line no-console
+      console.log("[DRD WebRTC] msg from soldier:", msg.type);
+      if (msg.type === "offer") {
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: "offer", sdp: msg.sdp as string }));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        ws.send(JSON.stringify({ type: "answer", room_id: meta.room_id, from_id: "commander", sdp: answer.sdp }));
+      } else if (msg.type === "answer") {
+        // In case the mobile sends an answer (if commander created the offer)
+        await pc.setRemoteDescription(new RTCSessionDescription({ type: "answer", sdp: msg.sdp as string }));
+      } else if (msg.type === "ice") {
+        const cand = msg.candidate as RTCIceCandidateInit;
+        if (cand) await pc.addIceCandidate(new RTCIceCandidate(cand));
+      } else if (msg.type === "peer_joined") {
+        // Soldier confirmed our join — no action needed, soldier will send offer
+        // eslint-disable-next-line no-console
+        console.log("[DRD WebRTC] peer_joined ACK, waiting for offer from soldier");
+      }
+    };
+
+    ws.onclose = () => {
+      liveWsRefs.current.delete(meta.room_id);
+      pc.close();
+    };
+
+    setLiveFeeds(prev => {
+      if (prev.find(f => f.room_id === meta.room_id)) return prev;
+      return [...prev, newFeed];
+    });
+  }, []);
+
+  const _closeLiveFeed = useCallback((roomId: string) => {
+    const ws = liveWsRefs.current.get(roomId);
+    ws?.close();
+    liveWsRefs.current.delete(roomId);
+    setLiveFeeds(prev => {
+      const next = prev.filter(f => f.room_id !== roomId);
+      if (next.length === 0) setShowLiveGrid(false);
+      return next;
+    });
+  }, []);
+
+  const handleMuteFeed = useCallback((roomId: string) => {
+    setLiveFeeds(prev => prev.map(f => f.room_id === roomId ? { ...f, muted: !f.muted } : f));
+  }, []);
+
+  const handleInviteFeed = useCallback((roomId: string) => {
+    const feed = liveFeeds.find(f => f.room_id === roomId);
+    if (!feed) return;
+    setMsgModal(feed.user_id);
+  }, [liveFeeds]);
+
   useEffect(() => {
     const interval = setInterval(() => {
       setUsers(prev => {
@@ -3643,9 +4123,12 @@ export default function DODMap() {
     meetingPoint: boolean,
     visibleTo: string[],
     isZone: boolean,
-    zoneType: Route["zoneType"]
+    zoneType: Route["zoneType"],
+    vertexSoldiers?: Record<number, string>
   ) => {
-    const coordinates = pendingRoute.map(wp => [wp.lat, wp.lng] as [number, number]);
+    // Sort zone coordinates to prevent crossing lines
+    const rawCoords = pendingRoute.map(wp => [wp.lat, wp.lng] as [number, number]);
+    const coordinates = isZone ? sortConvexOrder(rawCoords) : rawCoords;
     const tempId = `route_${Date.now()}`;
     const newRoute: Route = {
       id: tempId,
@@ -3661,6 +4144,7 @@ export default function DODMap() {
       isZone,
       zoneType,
       isActive: true,
+      vertexSoldiers: isZone ? vertexSoldiers : undefined,
     };
 
     setRoutes(prev => [...prev, newRoute]);
@@ -3782,6 +4266,8 @@ export default function DODMap() {
         onToggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         isConnected={isConnected}
         currentUser={currentUser}
+        liveFeedCount={liveFeeds.length}
+        onToggleLiveGrid={() => setShowLiveGrid(v => !v)}
         onLogout={() => {
           api.logout().catch(() => { });
           localStorage.removeItem("access_token");
@@ -3876,28 +4362,86 @@ export default function DODMap() {
                 <RoutePath key={route.id} route={route} />
               ))}
 
-              {/* Zone polygons */}
-              {routes.filter(r => r.isZone).map(zone => (
-                <Polygon
-                  key={`zone-${zone.id}`}
-                  positions={zone.coordinates}
-                  pathOptions={{
-                    color: zone.color,
-                    fillColor: zone.color,
-                    fillOpacity: 0.1,
-                    weight: 2,
-                    dashArray: "5 10",
-                  }}
-                >
-                  <Popup>
-                    <div className="text-xs" style={{ fontFamily: "'Poppins', sans-serif" }}>
-                      <div className="font-bold">{zone.name}</div>
-                      <div className="text-slate-500">Type: {zone.zoneType}</div>
-                      <div className="text-slate-500">Team: {zone.assignedTeam ? (dbTeams.find(t => t.id === zone.assignedTeam)?.name ?? "All") : "All"}</div>
-                    </div>
-                  </Popup>
-                </Polygon>
-              ))}
+              {/* Zone polygons — points sorted to prevent crossing lines */}
+              {routes.filter(r => r.isZone).map(zone => {
+                const sorted = sortConvexOrder(zone.coordinates);
+                return (
+                  <React.Fragment key={`zone-${zone.id}`}>
+                    <Polygon
+                      positions={sorted}
+                      pathOptions={{
+                        color: zone.color,
+                        fillColor: zone.color,
+                        fillOpacity: 0.12,
+                        weight: 2.5,
+                      }}
+                    >
+                      <Popup minWidth={200}>
+                        <div style={{ fontFamily: "'Poppins', sans-serif" }}>
+                          <div className="font-bold text-sm mb-1">{zone.name}</div>
+                          <div className="text-[10px] text-slate-500 space-y-0.5">
+                            <div>Type: <span className="font-semibold capitalize">{zone.zoneType}</span></div>
+                            <div>Team: {zone.assignedTeam ? (dbTeams.find(t => t.id === zone.assignedTeam)?.name ?? "All") : "All"}</div>
+                            <div>{zone.waypoints.length} vertices</div>
+                          </div>
+                        </div>
+                      </Popup>
+                    </Polygon>
+
+                    {/* Vertex markers with assigned soldiers */}
+                    {zone.waypoints.map((wp, idx) => {
+                      const assignedId = zone.vertexSoldiers?.[idx];
+                      const soldier = assignedId ? users.find(u => u.user_id === assignedId) : null;
+                      const initials = soldier
+                        ? soldier.name.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase()
+                        : `P${idx + 1}`;
+                      const col = soldier ? TEAM_COLORS[soldier.group]?.primary ?? zone.color : zone.color;
+
+                      const vertexIcon = L.divIcon({
+                        className: "zone-vertex-marker",
+                        html: `<div style="width:28px;height:28px;border-radius:50%;background:${col};border:2.5px solid white;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:white;font-family:'Poppins',sans-serif;box-shadow:0 2px 6px rgba(0,0,0,0.5);">${initials}</div>`,
+                        iconSize: [28, 28],
+                        iconAnchor: [14, 14],
+                      });
+
+                      return (
+                        <Marker
+                          key={`vertex-${zone.id}-${idx}`}
+                          position={[wp.lat, wp.lng]}
+                          icon={vertexIcon}
+                          eventHandlers={{
+                            click: () => {
+                              if (soldier) focusUserOnMap(soldier);
+                            }
+                          }}
+                        >
+                          <Tooltip direction="top" offset={[0, -16]} opacity={0.97}>
+                            <div style={{ fontFamily: "'Poppins', sans-serif", minWidth: 140 }}>
+                              <div className="font-bold text-xs mb-0.5">{wp.label || `Point ${idx + 1}`}</div>
+                              {soldier ? (
+                                <>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    <div className="w-5 h-5 rounded-full flex items-center justify-center text-[8px] font-bold"
+                                      style={{ background: col + "30", border: `1.5px solid ${col}`, color: col }}>
+                                      {initials}
+                                    </div>
+                                    <span className="font-semibold text-[11px]">{soldier.name}</span>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500 mt-0.5">{soldier.group} · {soldier.status.toUpperCase()}</div>
+                                  <div className="text-[9px]" style={{ color: STATUS_COLORS[soldier.status] }}>{soldier.speed?.toFixed(1)} km/h</div>
+                                </>
+                              ) : (
+                                <div className="text-[10px] text-slate-400 italic mt-0.5">No soldier assigned</div>
+                              )}
+                              <div className="text-[9px] text-slate-400 mt-0.5">{wp.lat.toFixed(4)}, {wp.lng.toFixed(4)}</div>
+                            </div>
+                          </Tooltip>
+                        </Marker>
+                      );
+                    })}
+                  </React.Fragment>
+                );
+              })}
 
               {/* Pending route */}
               {pendingRoute.length >= 2 && (
@@ -4008,9 +4552,12 @@ export default function DODMap() {
 
             {/* Alert badge */}
             {alertCount > 0 && (
-              <div className="absolute top-3 right-3 z-[1000] bg-red-500/95 rounded-full px-2.5 py-1 text-white text-[10px] md:text-xs font-bold flex items-center gap-1.5 shadow-lg">
-                <FiAlertTriangle size={12} />
-                {alertCount}
+              <div
+                className="absolute top-3 right-3 z-[1000] rounded-full px-3 py-1.5 text-white text-xs font-black flex items-center gap-1.5 shadow-2xl animate-pulse"
+                style={{ background: "#dc2626", boxShadow: "0 0 16px rgba(239,68,68,0.7), 0 4px 12px rgba(0,0,0,0.4)", letterSpacing: "0.5px" }}
+              >
+                <FiAlertTriangle size={13} />
+                {alertCount} ALERT{alertCount > 1 ? "S" : ""}
               </div>
             )}
           </div>
@@ -4168,6 +4715,50 @@ export default function DODMap() {
         <CreateTeamModal
           onClose={() => setShowCreateTeam(false)}
           onSaved={handleForceRefresh}
+        />
+      )}
+
+      {/* Live feed alert toast — shown immediately when soldier goes live */}
+      {pendingLiveAlert && !showLiveGrid && (
+        <LiveFeedAlertToast
+          alert={pendingLiveAlert}
+          onView={() => {
+            const token = localStorage.getItem("access_token");
+            if (token) _joinLiveFeed(pendingLiveAlert, token);
+            setShowLiveGrid(true);
+            setPendingLiveAlert(null);
+          }}
+          onIgnore={() => {
+            // Send rejection back through the video signaling room
+            const ws = liveWsRefs.current.get(pendingLiveAlert.room_id);
+            if (ws && ws.readyState === WebSocket.OPEN) {
+              ws.send(JSON.stringify({ type: "ignored", room_id: pendingLiveAlert.room_id, from: "commander" }));
+            } else {
+              // Connect briefly just to send rejection
+              const token = localStorage.getItem("access_token");
+              if (token) {
+                const rejectWs = new WebSocket(`${BASE_WS}/ws/video/${pendingLiveAlert.room_id}?token=${token}`);
+                rejectWs.onopen = () => {
+                  rejectWs.send(JSON.stringify({ type: "ignored", room_id: pendingLiveAlert.room_id, from: "commander", user_name: pendingLiveAlert.user_name }));
+                  setTimeout(() => rejectWs.close(), 1000);
+                };
+              }
+            }
+            setPendingLiveAlert(null);
+          }}
+        />
+      )}
+
+      {/* Live feed grid */}
+      {showLiveGrid && liveFeeds.length > 0 && (
+        <LiveFeedGrid
+          feeds={liveFeeds}
+          activeIndex={activeFeedIndex}
+          onSetActive={setActiveFeedIndex}
+          onMute={handleMuteFeed}
+          onInvite={handleInviteFeed}
+          onClose={(roomId) => roomId === "ALL" ? (setShowLiveGrid(false)) : _closeLiveFeed(roomId)}
+          users={users}
         />
       )}
 

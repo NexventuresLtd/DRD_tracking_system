@@ -69,16 +69,17 @@ async def list_follow_sessions(
     return [_serialize_session(session) for session in sessions]
 
 
-@router.get("/me/", response_model=RouteFollowSessionResponse, include_in_schema=False)
-@router.get("/me", response_model=RouteFollowSessionResponse)
+@router.get("/me/", include_in_schema=False)
+@router.get("/me")
 async def get_my_active_session(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Returns the active session or null — never raises 404 so the mobile never crashes on no-session."""
     service = RouteFollowService(db)
     session = await service.get_active_session_for_user(current_user.id)
     if not session:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active follow session")
+        return None
     return _serialize_session(session)
 
 

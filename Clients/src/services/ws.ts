@@ -44,7 +44,7 @@ class WSChannel {
     }
   }
 
-  private schedule(delay = 5000) {
+  private schedule(delay = 1500) {
     if (this.timer) clearTimeout(this.timer);
     this.timer = setTimeout(() => this.open(), delay);
   }
@@ -75,15 +75,19 @@ class WSChannel {
 export const locationWS = new WSChannel();
 export const eventWS = new WSChannel();
 export const messageWS = new WSChannel();
+export const videoAlertWS = new WSChannel();
 
 export function connectAll(token: string) {
   locationWS.connect('/ws/locations', token);
   eventWS.connect('/ws/events', token);
   messageWS.connect('/ws/messages', token);
+  // Connect to a commander alert room (room_id=alerts) to receive live-feed notifications
+  videoAlertWS.connect('/ws/video/alerts', token);
 }
 
 export function disconnectAll() {
   locationWS.close();
   eventWS.close();
   messageWS.close();
+  videoAlertWS.close();
 }
