@@ -55,6 +55,7 @@ async def init_db():
     from app.models.notification import Notification, UserFlag
     from app.models.audit import AuditLog, UserSession
     from app.models.evidence import Evidence
+    from app.models.live_session import LiveSession
     
     async with engine.begin() as conn:
         # Create all tables

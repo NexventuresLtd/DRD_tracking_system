@@ -11,6 +11,7 @@ import '../../config/constants.dart';
 import '../../widgets/status_indicator.dart';
 import 'field_map_screen.dart';
 import 'field_squad_view.dart';
+import 'live_feed_screen.dart';
 
 class FieldHome extends StatefulWidget {
   const FieldHome({super.key});
@@ -189,6 +190,15 @@ class _FieldHomeState extends State<FieldHome> with WidgetsBindingObserver {
                   onPressed: _checkLocationStatus,
                   tooltip: 'Location disabled - tap to retry',
                 ),
+              // Standalone LIVE button — start live feed from anywhere in the app
+              IconButton(
+                icon: const Icon(Icons.videocam_rounded, color: Color(0xFFEF4444), size: 22),
+                tooltip: 'Start Live Feed',
+                onPressed: () => Navigator.push(
+                  context,
+                  MaterialPageRoute(builder: (_) => const LiveFeedScreen()),
+                ),
+              ),
               IconButton(
                 icon: const Icon(Icons.logout_rounded, color: Color(0xFFEF4444), size: 20),
                 tooltip: 'Sign out',

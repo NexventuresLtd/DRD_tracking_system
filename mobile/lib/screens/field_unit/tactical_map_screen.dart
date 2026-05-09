@@ -23,6 +23,7 @@ import '../../services/storage_service.dart';
 
 class TacticalMark {
   final String id;
+  final String? backendId; // POI id on server
   final String typeId;
   final String label;
   final LatLng position;
@@ -32,6 +33,7 @@ class TacticalMark {
 
   TacticalMark({
     required this.id,
+    this.backendId,
     required this.typeId,
     required this.label,
     required this.position,
@@ -39,6 +41,17 @@ class TacticalMark {
     required this.symbol,
     required this.timestamp,
   });
+
+  TacticalMark copyWith({String? backendId}) => TacticalMark(
+    id: id,
+    backendId: backendId ?? this.backendId,
+    typeId: typeId,
+    label: label,
+    position: position,
+    color: color,
+    symbol: symbol,
+    timestamp: timestamp,
+  );
 }
 
 // ─── Configuration ───────────────────────────────────────────────────────────
@@ -792,6 +805,13 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         'visible_to_all': true,
       });
       poiId = (res as Map<String, dynamic>?)?['id'] as String?;
+      // Save backend ID in the mark for later deletion/detail view
+      if (poiId != null) {
+        setState(() {
+          final idx = _marks.indexWhere((m) => m.id == mark.id);
+          if (idx >= 0) _marks[idx] = _marks[idx].copyWith(backendId: poiId);
+        });
+      }
     } catch (_) {}
 
     // POST to backend: create event
@@ -1204,7 +1224,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return Consumer<LocationProvider>(
       builder: (context, loc, _) {
         final auth = context.read<AuthProvider>();
-        final myPos = LatLng(loc.latitude, loc.longitude);
+        // Fall back to operation area default until GPS has a real fix
+        final myPos = loc.hasRealFix
+            ? LatLng(loc.latitude, loc.longitude)
+            : const LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
         final myId = auth.user?.id;
         final topPad = MediaQuery.of(context).padding.top;
 
@@ -1725,9 +1748,175 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         point: m.position,
         width: isEnemy ? 64 : 44,
         height: isEnemy ? 80 : 56,
-        child: markerWidget,
+        child: GestureDetector(
+          onTap: () => _showMarkDetailsSheet(m),
+          child: markerWidget,
+        ),
       );
     }).toList();
+  }
+
+  void _showMarkDetailsSheet(TacticalMark m) {
+    final isEnemy = _enemyTypeIds.contains(m.typeId);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0F1C2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36, height: 4,
+                margin: const EdgeInsets.only(bottom: 16),
+                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+              ),
+            ),
+            // Mark header
+            Row(
+              children: [
+                Container(
+                  width: 40, height: 40,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: m.color.withValues(alpha: 0.2),
+                    border: Border.all(color: m.color, width: 2),
+                  ),
+                  child: Center(child: Text(m.symbol, style: TextStyle(color: m.color, fontWeight: FontWeight.w900, fontSize: 13))),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(m.label, style: TextStyle(
+                        color: isEnemy ? const Color(0xFFEF4444) : Colors.white,
+                        fontSize: 16, fontWeight: FontWeight.w800, fontFamily: 'Poppins',
+                      )),
+                      if (isEnemy)
+                        Container(
+                          margin: const EdgeInsets.only(top: 3),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEF4444).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+                          ),
+                          child: const Text('⚠ ENEMY MARK', style: TextStyle(
+                            color: Color(0xFFEF4444), fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1,
+                          )),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            // Details
+            _markDetailRow(Icons.location_on_outlined, 'Location',
+              '${m.position.latitude.toStringAsFixed(5)}, ${m.position.longitude.toStringAsFixed(5)}'),
+            _markDetailRow(Icons.access_time, 'Marked at',
+              '${m.timestamp.hour.toString().padLeft(2, '0')}:${m.timestamp.minute.toString().padLeft(2, '0')} · ${m.timestamp.day}/${m.timestamp.month}/${m.timestamp.year}'),
+            if (m.backendId != null)
+              _markDetailRow(Icons.fingerprint, 'Report ID', m.backendId!.substring(0, 8).toUpperCase()),
+            const SizedBox(height: 20),
+            // Start Live Feed button
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveFeedScreen()));
+                },
+                icon: const Icon(Icons.videocam_rounded, size: 16),
+                label: const Text('Start Live Feed'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFEF4444),
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
+            // Deactivate + Delete row
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await _deactivateMark(m);
+                    },
+                    icon: const Icon(Icons.visibility_off_outlined, size: 16),
+                    label: const Text('Mark Inactive'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: DRDTheme.warningColor,
+                      side: BorderSide(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await _deleteMark(m);
+                    },
+                    icon: const Icon(Icons.delete_outline_rounded, size: 16),
+                    label: const Text('Delete'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: DRDTheme.dangerColor,
+                      side: BorderSide(color: DRDTheme.dangerColor.withValues(alpha: 0.5)),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _markDetailRow(IconData icon, String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(icon, size: 14, color: Colors.white38),
+          const SizedBox(width: 8),
+          Text('$label: ', style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'Poppins')),
+          Expanded(child: Text(value, style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'Poppins', fontWeight: FontWeight.w600))),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _deactivateMark(TacticalMark m) async {
+    if (m.backendId != null) {
+      try {
+        await _api.put('/pois/${m.backendId}', {'status': 'inactive'});
+      } catch (_) {}
+    }
+    setState(() => _marks.removeWhere((mark) => mark.id == m.id));
+    _showSnack('Mark set to inactive', color: DRDTheme.warningColor);
+  }
+
+  Future<void> _deleteMark(TacticalMark m) async {
+    if (m.backendId != null) {
+      try {
+        await _api.delete('/pois/${m.backendId}');
+      } catch (_) {}
+    }
+    setState(() => _marks.removeWhere((mark) => mark.id == m.id));
+    _showSnack('Mark deleted', color: DRDTheme.successColor);
   }
 
   List<Polyline> _buildRouteLines() {

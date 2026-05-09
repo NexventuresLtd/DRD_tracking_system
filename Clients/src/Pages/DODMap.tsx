@@ -377,31 +377,79 @@ function createUserMarkerHTML(user: User, isSelected: boolean): string {
   `;
 }
 
+const ENEMY_LABEL_KEYWORDS = /\b(ENEMY|CONTACT|IED|MINE|CNT|VEH\.|HOSTILE)\b/i;
+
+// Map mobile mark type keywords to their exact colors — must match _markTypes in tactical_map_screen.dart
+const MARK_COLOR_MAP: Array<{ re: RegExp; color: string }> = [
+  { re: /\b(ENEMY CONTACT|CNT)\b/i,  color: "#ef4444" },
+  { re: /\b(ENEMY VEH|VEH\.)\b/i,    color: "#dc2626" },
+  { re: /\b(IED|MINE)\b/i,            color: "#b91c1c" },
+  { re: /\b(SAFE ZONE|SAFE)\b/i,      color: "#22c55e" },
+  { re: /\b(CASUALTY|MED)\b/i,        color: "#f43f5e" },
+  { re: /\b(RV POINT|RV)\b/i,         color: "#3b82f6" },
+  { re: /\b(EXTRACTION|EXT)\b/i,       color: "#eab308" },
+  { re: /\b(SUPPLY|SUP)\b/i,          color: "#f97316" },
+  { re: /\b(OBS POST|OBS)\b/i,        color: "#64748b" },
+  { re: /\b(CMD POST|CMD)\b/i,        color: "#8b5cf6" },
+];
+
+function getMarkColor(label: string, fallback: string): string {
+  for (const { re, color } of MARK_COLOR_MAP) {
+    if (re.test(label)) return color;
+  }
+  return fallback;
+}
+
+function isEnemyPOI(poi: POI): boolean {
+  return ENEMY_LABEL_KEYWORDS.test(poi.label);
+}
+
 function createPOIMarkerHTML(poi: POI): string {
   const info = POI_ICONS_CONFIG[poi.type];
   const shape = poi.shape || "diamond";
+  const enemy = isEnemyPOI(poi);
+  // Use mobile mark's original color if the label matches a known mark type
+  const color = getMarkColor(poi.label, enemy ? "#ef4444" : info.color);
+  const size = enemy ? 42 : 34;
+  const glow = enemy ? `box-shadow: 0 0 12px rgba(239,68,68,0.8), 0 0 4px rgba(239,68,68,0.5);` : "";
 
   return `
     <div style="
-      width: 34px;
-      height: 34px;
+      width: ${size}px;
+      height: ${size}px;
       display: flex;
       align-items: center;
       justify-content: center;
       position: relative;
+      ${glow}
     ">
-      ${getTacticalShapeSVG(shape, info.color, 34)}
+      ${getTacticalShapeSVG(shape, color, size)}
       <span style="
         position: absolute;
         top: 50%;
         left: 50%;
         transform: translate(-50%, -50%);
-        font-size: 8px;
-        font-weight: 700;
-        color: ${info.color};
+        font-size: ${enemy ? 9 : 8}px;
+        font-weight: ${enemy ? 900 : 700};
+        color: ${color};
         font-family: 'Poppins', sans-serif;
         pointer-events: none;
       ">${info.tacticalIcon}</span>
+      ${enemy ? `<div style="
+        position: absolute;
+        bottom: -14px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #ef4444;
+        color: white;
+        font-size: 6px;
+        font-weight: 900;
+        padding: 1px 4px;
+        border-radius: 3px;
+        white-space: nowrap;
+        font-family: 'Poppins', sans-serif;
+        letter-spacing: 0.5px;
+      ">⚠ ENEMY</div>` : ""}
     </div>
   `;
 }
@@ -417,12 +465,14 @@ function createUserIcon(user: User, isSelected: boolean): L.DivIcon {
 }
 
 function createPOIIcon(poi: POI): L.DivIcon {
+  const enemy = isEnemyPOI(poi);
+  const sz = enemy ? 56 : 34; // extra space for "⚠ ENEMY" label below
   return L.divIcon({
-    className: "custom-poi-marker",
+    className: enemy ? "custom-poi-marker enemy-marker" : "custom-poi-marker",
     html: createPOIMarkerHTML(poi),
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -17],
+    iconSize: [sz, sz],
+    iconAnchor: [sz / 2, sz / 2],
+    popupAnchor: [0, -sz / 2],
   });
 }
 
@@ -954,30 +1004,52 @@ function AlertsPanel({
   expanded,
   onToggle,
   onAlertClick,
+  onResolve,
 }: {
   users: User[];
   expanded: boolean;
   onToggle: () => void;
   onAlertClick?: (user: User) => void;
+  onResolve?: (userId: string, isSOS: boolean) => void;
 }) {
+  const [resolved, setResolved] = useState<Set<string>>(new Set());
+
   const alerts = useMemo(() => {
-    const result: { user: User; msg: string; elapsed: string; severity: "high" | "medium" }[] = [];
-    // Only show alerts for users with real names (not raw UUIDs/IDs)
-    const isKnownUser = (u: User) => u.name && u.name.length > 2 && !/^[0-9a-f-]{8,}$/i.test(u.name) && u.name !== "Unknown";
+    const result: { user: User; msg: string; elapsed: string; severity: "high" | "medium"; key: string }[] = [];
+    // SOS is always shown regardless of name quality — it's life-threatening
+    const hasKnownName = (u: User) => u.name && u.name.length > 2 && !/^[0-9a-f-]{8,}$/i.test(u.name) && u.name !== "Unknown";
+    const displayName = (u: User) => hasKnownName(u) ? u.name : `Unit-${u.user_id.slice(0, 4).toUpperCase()}`;
 
-    users.filter(u => u.flag === "help" && isKnownUser(u)).forEach(u => {
-      result.unshift({ user: u, msg: `${u.name} requested SOS`, elapsed: formatElapsed(u.flagTime || u.lastUpdate), severity: "high" });
+    // SOS — key includes flagTime minute so a NEW SOS from same user always reappears
+    users.filter(u => u.flag === "help").forEach(u => {
+      const minuteKey = u.flagTime ? Math.floor(u.flagTime.getTime() / 60000) : 0;
+      result.unshift({
+        user: u,
+        msg: `${displayName(u)} — SOS REQUEST`,
+        elapsed: formatElapsed(u.flagTime || u.lastUpdate),
+        severity: "high",
+        key: `sos_${u.user_id}_${minuteKey}`,
+      });
     });
-    users.filter(u => u.status === "offline" && isKnownUser(u)).forEach(u => {
-      result.push({ user: u, msg: `${u.name} is OFFLINE`, elapsed: formatElapsed(u.lastUpdate), severity: "high" });
+    // Offline
+    users.filter(u => u.status === "offline" && hasKnownName(u)).forEach(u => {
+      result.push({ user: u, msg: `${u.name} is OFFLINE`, elapsed: formatElapsed(u.lastUpdate), severity: "high", key: `off_${u.user_id}` });
     });
-    users.filter(u => u.status === "stale" && u.flag !== "help" && isKnownUser(u)).forEach(u => {
+    // Stale
+    users.filter(u => u.status === "stale" && u.flag !== "help" && hasKnownName(u)).forEach(u => {
       const sec = Math.floor((Date.now() - u.lastUpdate.getTime()) / 1000);
-      result.push({ user: u, msg: `${u.name} stale ${sec}s`, elapsed: `${sec}s`, severity: "medium" });
+      result.push({ user: u, msg: `${u.name} stale ${sec}s`, elapsed: `${sec}s`, severity: "medium", key: `stale_${u.user_id}` });
     });
 
-    return result;
-  }, [users]);
+    return result.filter(a => !resolved.has(a.key));
+  }, [users, resolved]);
+
+  const handleResolve = (e: React.MouseEvent, a: { user: User; key: string; severity: "high" | "medium" }) => {
+    e.stopPropagation();
+    setResolved(prev => new Set([...prev, a.key]));
+    const isSOS = a.key.startsWith("sos_");
+    onResolve?.(a.user.user_id, isSOS);
+  };
 
   const hasHighAlerts = alerts.some(a => a.severity === "high");
 
@@ -999,34 +1071,46 @@ function AlertsPanel({
       {expanded && (
         <div className="max-h-52 overflow-y-auto custom-scrollbar">
           {alerts.length === 0 ? (
-            <div className="p-4 text-slate-500 text-[11px] text-center">No active alerts</div>
-          ) : alerts.map((a, i) => {
+            <div className="p-4 text-center">
+              <FiCheckCircle size={16} className="mx-auto mb-1.5 text-green-500 opacity-60" />
+              <div className="text-slate-500 text-[11px]">All clear — no active alerts</div>
+            </div>
+          ) : alerts.map((a) => {
             const isHigh = a.severity === "high";
             return (
               <div
-                key={i}
-                className="px-2.5 py-2.5 border-b border-white/5 flex items-start gap-2 cursor-pointer transition-colors"
+                key={a.key}
+                className="px-2.5 py-2.5 border-b border-white/5 flex items-center gap-2 transition-colors"
                 style={{ backgroundColor: isHigh ? "rgba(239,68,68,0.07)" : "rgba(245,158,11,0.05)" }}
-                onClick={() => onAlertClick?.(a.user)}
               >
-                <FiAlertTriangle size={13} color={isHigh ? "#ef4444" : "#f59e0b"} className="mt-0.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <div
-                    className="text-[12px] font-bold truncate"
-                    style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}
-                  >
-                    {a.msg}
-                  </div>
-                  <div className="text-[9px] mt-0.5 truncate" style={{ color: isHigh ? "#fca5a5" : "#fde68a" }}>
-                    {a.user.group} · {a.user.message}
-                  </div>
-                </div>
-                <span
-                  className="text-[10px] font-black shrink-0 tracking-wide"
-                  style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}
+                {/* Alert info — clickable area */}
+                <div
+                  className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
+                  onClick={() => onAlertClick?.(a.user)}
                 >
-                  {a.elapsed}
-                </span>
+                  <FiAlertTriangle size={13} color={isHigh ? "#ef4444" : "#f59e0b"} className="mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[12px] font-bold truncate" style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}>
+                      {a.msg}
+                    </div>
+                    <div className="text-[9px] mt-0.5 truncate" style={{ color: isHigh ? "#fca5a5" : "#fde68a" }}>
+                      {a.user.group} · {a.user.message}
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-black shrink-0 tracking-wide" style={{ color: isHigh ? "#ef4444" : "#f59e0b" }}>
+                    {a.elapsed}
+                  </span>
+                </div>
+
+                {/* Resolve button — stops propagation so it doesn't focus the map */}
+                <button
+                  onClick={e => handleResolve(e, a)}
+                  title="Mark as resolved"
+                  className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center transition-all hover:scale-110"
+                  style={{ background: "rgba(34,197,94,0.15)", border: "1px solid rgba(34,197,94,0.4)" }}
+                >
+                  <FiCheckCircle size={13} color="#22c55e" />
+                </button>
               </div>
             );
           })}
@@ -2805,10 +2889,14 @@ function AllEventsModal({ onClose }: { onClose: () => void }) {
 
 function LiveFeedAlertToast({
   alert,
+  saveSession,
+  onSaveToggle,
   onView,
   onIgnore,
 }: {
   alert: { room_id: string; user_name: string; team_name: string; lat?: number; lng?: number };
+  saveSession: boolean;
+  onSaveToggle: () => void;
   onView: () => void;
   onIgnore: () => void;
 }) {
@@ -2821,14 +2909,11 @@ function LiveFeedAlertToast({
   return (
     <div
       className="fixed bottom-6 right-6 z-[7000] rounded-2xl shadow-2xl overflow-hidden"
-      style={{ width: 320, background: "#0a1628", border: "2px solid rgba(239,68,68,0.6)", boxShadow: "0 0 30px rgba(239,68,68,0.4), 0 20px 50px rgba(0,0,0,0.6)" }}
+      style={{ width: 340, background: "#0a1628", border: "2px solid rgba(239,68,68,0.6)", boxShadow: "0 0 30px rgba(239,68,68,0.4), 0 20px 50px rgba(0,0,0,0.6)" }}
     >
-      {/* Red pulsing top bar */}
       <div className="h-1.5 bg-red-500 animate-pulse" />
-
       <div className="p-4">
-        <div className="flex items-start gap-3 mb-4">
-          {/* Pulsing live indicator */}
+        <div className="flex items-start gap-3 mb-3">
           <div className="relative shrink-0 mt-0.5">
             <div className="w-10 h-10 rounded-full flex items-center justify-center" style={{ background: "rgba(239,68,68,0.2)", border: "2px solid #ef4444" }}>
               <FiBell size={18} color="#ef4444" />
@@ -2838,32 +2923,39 @@ function LiveFeedAlertToast({
               <span className="w-2 h-2 rounded-full bg-white" />
             </span>
           </div>
-
           <div className="flex-1 min-w-0">
             <div className="text-[10px] font-bold tracking-widest text-red-400 mb-0.5">LIVE FEED REQUEST</div>
-            <div className="text-white font-bold text-base leading-tight truncate">{alert.user_name}</div>
-            <div className="text-slate-400 text-xs mt-0.5">
-              {alert.team_name}
+            <div className="text-white font-bold text-base leading-tight">{alert.user_name}</div>
+            <div className="text-slate-400 text-xs mt-0.5">{alert.team_name}
               {alert.lat && <span className="ml-1 text-slate-500">· {alert.lat.toFixed(3)}, {alert.lng?.toFixed(3)}</span>}
             </div>
           </div>
-
-          <div className="text-red-400 text-xs font-bold shrink-0">{elapsed}s</div>
+          <div className="text-red-400 text-xs font-bold shrink-0 tabular-nums">{elapsed}s</div>
         </div>
 
+        {/* Save toggle */}
+        <button
+          onClick={onSaveToggle}
+          className="w-full mb-3 flex items-center gap-2 px-3 py-2 rounded-lg transition-colors text-xs font-semibold"
+          style={{
+            background: saveSession ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.05)",
+            border: saveSession ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(255,255,255,0.1)",
+            color: saveSession ? "#22c55e" : "#64748b",
+          }}
+        >
+          <FiCheckCircle size={13} />
+          {saveSession ? "✓ Recording will be saved for review" : "Save recording for later review"}
+        </button>
+
         <div className="flex gap-2">
-          <button
-            onClick={onView}
+          <button onClick={onView}
             className="flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wide text-white flex items-center justify-center gap-1.5"
-            style={{ background: "#2563eb", border: "none", cursor: "pointer" }}
-          >
+            style={{ background: "#2563eb", border: "none", cursor: "pointer" }}>
             <FiActivity size={13} /> VIEW LIVE
           </button>
-          <button
-            onClick={onIgnore}
+          <button onClick={onIgnore}
             className="flex-1 py-2.5 rounded-xl text-xs font-bold tracking-wide flex items-center justify-center gap-1.5"
-            style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", cursor: "pointer" }}
-          >
+            style={{ background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.3)", color: "#ef4444", cursor: "pointer" }}>
             <FiX size={13} /> IGNORE
           </button>
         </div>
@@ -2892,8 +2984,8 @@ const BASE_WS = (() => {
   return url.replace(/^https/, "wss").replace(/^http/, "ws").replace(/\/$/, "");
 })();
 
-function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, users }:
-  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; users: User[] }) {
+function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, onMinimize, minimized, users }:
+  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean; users: User[] }) {
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
 
   // Helper: register a video element and immediately attach any available stream
@@ -2924,21 +3016,65 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
   const main = feeds[activeIndex] ?? feeds[0];
   const sides = feeds.filter((_, i) => i !== activeIndex);
 
+  // ── Minimized PiP mode ──────────────────────────────────────────────────────
+  if (minimized) {
+    return (
+      <div
+        className="fixed bottom-6 right-6 z-[6000] rounded-xl overflow-hidden shadow-2xl cursor-pointer"
+        style={{ width: 200, height: 130, border: "2px solid rgba(239,68,68,0.5)" }}
+        onClick={onMinimize}
+      >
+        <video
+          ref={el => setVideoRef(main.room_id, el, main.stream)}
+          autoPlay playsInline muted
+          className="w-full h-full object-cover"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+        <div className="absolute top-1.5 left-2 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+          <span className="text-[9px] font-bold text-red-400">LIVE</span>
+        </div>
+        <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+          <div>
+            <div className="text-white font-bold text-[10px] truncate">{main.user_name}</div>
+            <div className="text-white/50 text-[8px]">{main.team_name}</div>
+          </div>
+          <div className="w-6 h-6 rounded-full bg-blue-500/30 flex items-center justify-center text-[8px] text-blue-300 font-bold">
+            ▲
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 bg-black z-[6000] flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
-      {/* Header */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-black/80 border-b border-white/10">
-        <span className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+
+      {/* Always-visible requester info banner */}
+      <div className="flex items-center gap-3 px-4 py-2 bg-red-950/80 border-b border-red-500/30">
+        <span className="flex items-center gap-1.5">
           <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-          LIVE FEEDS — {feeds.length}
+          <span className="text-red-400 text-[10px] font-bold tracking-widest">LIVE</span>
         </span>
-        <span className="text-white/60 text-xs">{main.user_name} · {main.team_name}</span>
+        <div className="flex items-center gap-2">
+          <div className="w-6 h-6 rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center text-[9px] font-bold text-red-300">
+            {main.user_name.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase()}
+          </div>
+          <div>
+            <span className="text-white font-bold text-sm">{main.user_name}</span>
+            <span className="text-white/50 text-xs ml-2">{main.team_name}</span>
+            {main.lat && <span className="text-white/30 text-[10px] ml-2">{main.lat.toFixed(4)}, {main.lng?.toFixed(4)}</span>}
+          </div>
+        </div>
         <div className="flex-1" />
-        <button onClick={() => onInvite(main.room_id)} className="px-3 py-1.5 rounded text-xs font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
-          <FiUsers size={12} className="inline mr-1" /> Invite
+        <button onClick={() => onInvite(main.room_id)} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
+          <FiUsers size={11} className="inline mr-1" /> Invite
         </button>
-        <button onClick={() => onClose("ALL")} className="px-3 py-1.5 rounded text-xs font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors">
-          <FiX size={12} className="inline mr-1" /> Close All
+        <button onClick={onMinimize} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors" title="Minimize">
+          <FiChevronDown size={11} className="inline mr-1" /> Minimize
+        </button>
+        <button onClick={() => onClose("ALL")} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors">
+          <FiX size={11} className="inline mr-1" /> End All
         </button>
       </div>
 
@@ -2950,53 +3086,53 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
             autoPlay playsInline
             className="w-full h-full object-cover"
           />
-          {/* Main feed overlay */}
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/70 to-transparent flex items-end justify-between">
-            <div>
-              <div className="text-white font-bold text-sm">{main.user_name}</div>
-              <div className="text-white/60 text-xs">{main.team_name}
-                {main.lat && <span className="ml-2">· {main.lat.toFixed(4)}, {main.lng?.toFixed(4)}</span>}
-              </div>
+
+          {/* Speaker name — always visible at top of main feed */}
+          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-full"
+            style={{ background: "rgba(0,0,0,0.65)", border: "1px solid rgba(255,255,255,0.1)", backdropFilter: "blur(4px)" }}>
+            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+            <span className="text-white font-bold text-sm">{main.user_name}</span>
+            <span className="text-white/50 text-xs">· {main.team_name}</span>
+          </div>
+
+          {/* Bottom controls */}
+          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">
+            <div className="text-white/50 text-[10px]">
+              {main.lat && <span>{main.lat.toFixed(5)}, {main.lng?.toFixed(5)}</span>}
             </div>
             <div className="flex gap-2">
-              <button
-                onClick={() => onMute(main.room_id)}
+              <button onClick={() => onMute(main.room_id)}
                 className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
-                style={{ background: main.muted ? "rgba(239,68,68,0.3)" : "rgba(255,255,255,0.15)" }}
-                title={main.muted ? "Unmute" : "Mute"}
-              >
+                style={{ background: main.muted ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.15)", border: main.muted ? "1px solid rgba(239,68,68,0.5)" : "1px solid rgba(255,255,255,0.1)" }}
+                title={main.muted ? "Unmute" : "Mute"}>
                 {main.muted ? <FiAlertCircle size={16} color="#ef4444" /> : <FiActivity size={16} color="white" />}
               </button>
-              <button onClick={() => onClose(main.room_id)} className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/30 hover:bg-red-500/50 transition-colors">
+              <button onClick={() => onClose(main.room_id)} className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/40 hover:bg-red-500/60 transition-colors border border-red-500/40">
                 <FiX size={16} color="white" />
               </button>
             </div>
           </div>
         </div>
 
-        {/* Side feeds grid */}
+        {/* Side feeds */}
         {sides.length > 0 && (
-          <div className="w-52 flex flex-col gap-1 p-1 bg-slate-950 overflow-y-auto custom-scrollbar">
-            {sides.map((feed, idx) => {
+          <div className="w-52 flex flex-col gap-1 p-1 bg-black/90 overflow-y-auto custom-scrollbar">
+            {sides.map((feed) => {
               const realIdx = feeds.indexOf(feed);
               return (
-                <div key={feed.room_id} className="relative rounded overflow-hidden cursor-pointer border-2 border-transparent hover:border-blue-500/60 transition-colors aspect-video"
+                <div key={feed.room_id} className="relative rounded-lg overflow-hidden cursor-pointer border-2 border-transparent hover:border-blue-500/60 transition-colors aspect-video"
                   onClick={() => onSetActive(realIdx)}>
-                  <video
-                    ref={el => setVideoRef(feed.room_id, el, feed.stream)}
-                    autoPlay playsInline muted
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute bottom-0 left-0 right-0 px-2 py-1 bg-black/60 flex items-center justify-between">
-                    <span className="text-white text-[9px] font-semibold truncate">{feed.user_name}</span>
-                    <button onClick={e => { e.stopPropagation(); onMute(feed.room_id); }}
-                      className="ml-1 shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-white/10">
+                  <video ref={el => setVideoRef(feed.room_id, el, feed.stream)} autoPlay playsInline muted className="w-full h-full object-cover" />
+                  {/* Speaker name on side feed */}
+                  <div className="absolute top-1 left-1.5 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                    <span className="text-white text-[8px] font-bold drop-shadow">{feed.user_name}</span>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 px-2 py-1 bg-black/70 flex items-center justify-between">
+                    <span className="text-white/60 text-[8px] truncate">{feed.team_name}</span>
+                    <button onClick={e => { e.stopPropagation(); onMute(feed.room_id); }} className="ml-1 shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-white/10">
                       {feed.muted ? <FiAlertCircle size={10} color="#ef4444" /> : <FiActivity size={10} color="white" />}
                     </button>
-                  </div>
-                  <div className="absolute top-1 right-1 px-1.5 py-0.5 rounded text-[8px] font-bold"
-                    style={{ background: TEAM_COLORS[feed.team_name as Team]?.bg ?? "rgba(59,130,246,0.3)", color: TEAM_COLORS[feed.team_name as Team]?.primary ?? "#3b82f6" }}>
-                    {feed.team_name.replace(/^Team\s+/i, "")}
                   </div>
                 </div>
               );
@@ -3110,6 +3246,174 @@ function POIPopup({ poi, onDeactivate }: { poi: POI; onDeactivate: (id: string) 
   );
 }
 
+// ─────────────────────────── PAST LIVE SESSIONS PANEL ───────────────────────
+interface LiveSessionRecord {
+  id: string; initiator_name: string; team_name: string;
+  lat?: number; lng?: number; saved: boolean; has_video: boolean;
+  duration_seconds?: number; started_at?: string; ended_at?: string;
+}
+
+function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boolean; onToggle: () => void; refreshKey: number }) {
+  const [sessions, setSessions] = useState<LiveSessionRecord[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState<"all" | "saved">("all");
+  const [playingSession, setPlayingSession] = useState<LiveSessionRecord | null>(null);
+
+  const reload = () => {
+    setLoading(true);
+    api.listLiveSessions(filter === "saved")
+      .then(res => setSessions(res.data as LiveSessionRecord[]))
+      .catch(() => setSessions([]))
+      .finally(() => setLoading(false));
+  };
+
+  // Reload when panel opens, filter changes, OR when refreshKey changes (session ended externally)
+  useEffect(() => { if (visible) reload(); }, [visible, filter, refreshKey]);
+
+  const fmtDuration = (s?: number | null) => {
+    if (!s) return "—";
+    if (s < 60) return `${Math.round(s)}s`;
+    return `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`;
+  };
+
+  return (
+    <>
+      <div className="bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden">
+        <div className="flex items-center border-b border-white/10">
+          <button
+            onClick={onToggle}
+            className="flex-1 flex items-center gap-2 px-3 py-2.5 bg-white/5 hover:bg-white/8 text-foreground cursor-pointer text-xs font-semibold tracking-wide transition-colors"
+          >
+            <FiActivity size={13} className="text-slate-400" />
+            <span className="flex-1 text-left">Past Live Sessions</span>
+            <span className="text-slate-500 text-xs" style={{ transform: visible ? "rotate(180deg)" : "rotate(0deg)", display: "inline-block" }}>▾</span>
+          </button>
+          {visible && (
+            <button
+              onClick={() => reload()}
+              title="Refresh list"
+              className="px-3 py-2.5 bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors border-l border-white/10 cursor-pointer"
+            >
+              <FiRefreshCw size={12} className={loading ? "animate-spin" : ""} />
+            </button>
+          )}
+        </div>
+
+        {visible && (
+          <div className="p-2">
+            <div className="flex gap-1 mb-2 rounded-md bg-white/5 p-1 text-[10px]">
+              {(["all", "saved"] as const).map(f => (
+                <button key={f} onClick={() => setFilter(f)}
+                  className="flex-1 rounded px-2 py-1 font-semibold transition-colors"
+                  style={{ backgroundColor: filter === f ? "rgba(59,130,246,0.22)" : "transparent", color: filter === f ? "#60a5fa" : "#94a3b8" }}>
+                  {f === "all" ? "All" : "Saved Only"}
+                </button>
+              ))}
+            </div>
+
+            {loading && <div className="py-4 text-center text-slate-500 text-[10px]">Loading…</div>}
+            {!loading && sessions.length === 0 && (
+              <div className="py-4 text-center text-slate-500 text-[10px]">No sessions recorded yet</div>
+            )}
+
+            <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto custom-scrollbar">
+              {sessions.map(s => (
+                <div
+                  key={s.id}
+                  className="rounded-lg p-2.5 cursor-pointer hover:opacity-90 transition-opacity"
+                  style={{ background: "rgba(30,41,59,0.6)", border: "1px solid rgba(255,255,255,0.07)" }}
+                  onClick={() => setPlayingSession(s)}
+                >
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className="w-2 h-2 rounded-full shrink-0" style={{ background: s.has_video ? "#3b82f6" : s.saved ? "#22c55e" : "#64748b" }} />
+                    <span className="font-bold text-[11px] text-white truncate flex-1">{s.initiator_name}</span>
+                    <div className="flex gap-1 shrink-0">
+                      {s.has_video && (
+                        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded" style={{ background: "rgba(59,130,246,0.2)", color: "#60a5fa", border: "1px solid rgba(59,130,246,0.35)" }}>
+                          ▶ VIDEO
+                        </span>
+                      )}
+                      {s.saved && !s.has_video && (
+                        <span className="text-[8px] font-bold px-1.5 py-0.5 rounded" style={{ background: "rgba(34,197,94,0.15)", color: "#22c55e", border: "1px solid rgba(34,197,94,0.3)" }}>SAVED</span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="text-[9px] text-slate-400 space-y-0.5">
+                    <div className="flex gap-3">
+                      <span>{s.team_name || "—"}</span>
+                      <span>{fmtDuration(s.duration_seconds)}</span>
+                    </div>
+                    {s.started_at && <div>{new Date(s.started_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}</div>}
+                    {s.lat && <div className="text-slate-500">{Number(s.lat).toFixed(4)}, {Number(s.lng).toFixed(4)}</div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Session replay modal */}
+      {playingSession && (
+        <div
+          className="fixed inset-0 bg-black/80 z-[7500] flex items-center justify-center p-4"
+          onClick={() => setPlayingSession(null)}
+        >
+          <div
+            className="rounded-2xl overflow-hidden shadow-2xl w-full max-w-2xl"
+            style={{ background: "#0a1628", border: "1px solid rgba(59,130,246,0.3)" }}
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-white/10">
+              <div className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: "rgba(59,130,246,0.2)", border: "1px solid rgba(59,130,246,0.4)" }}>
+                <FiActivity size={14} color="#3b82f6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-white font-bold text-sm truncate">{playingSession.initiator_name}</div>
+                <div className="text-slate-400 text-[10px]">
+                  {playingSession.team_name}
+                  {playingSession.started_at && ` · ${new Date(playingSession.started_at).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}`}
+                  {playingSession.duration_seconds && ` · ${fmtDuration(playingSession.duration_seconds)}`}
+                </div>
+              </div>
+              <button onClick={() => setPlayingSession(null)} className="text-slate-500 hover:text-white transition-colors bg-transparent border-none cursor-pointer">
+                <FiX size={18} />
+              </button>
+            </div>
+
+            {/* Video or metadata */}
+            {playingSession.has_video ? (
+              <div className="bg-black">
+                <video
+                  src={`${(import.meta.env.VITE_API_URL as string || 'https://drd.nexventures.net/')}api/v1/live-sessions/${playingSession.id}/video?token=${localStorage.getItem('access_token') ?? ''}`}
+                  controls
+                  autoPlay
+                  className="w-full max-h-[60vh]"
+                  style={{ background: "#000" }}
+                />
+              </div>
+            ) : (
+              <div className="p-6 flex flex-col items-center gap-3 text-center">
+                <FiClock size={28} className="text-slate-600" />
+                <div className="text-slate-400 text-sm">No video recording for this session</div>
+                <div className="text-slate-600 text-xs">To save recordings, enable "Save recording" when viewing a live feed.</div>
+              </div>
+            )}
+
+            {/* Metadata footer */}
+            <div className="px-4 py-3 border-t border-white/8 flex flex-wrap gap-4 text-[10px] text-slate-500">
+              {playingSession.lat && <span><FiMapPin size={10} className="inline mr-1" />{Number(playingSession.lat).toFixed(4)}, {Number(playingSession.lng).toFixed(4)}</span>}
+              <span><FiUsers size={10} className="inline mr-1" />{playingSession.team_name || "Unknown team"}</span>
+              {playingSession.ended_at && <span>Ended: {new Date(playingSession.ended_at).toLocaleTimeString()}</span>}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─────────────────────────── MAIN COMPONENT ───────────────────────────
 export default function DODMap() {
   const [users, setUsers] = useState<User[]>([]);
@@ -3140,8 +3444,17 @@ export default function DODMap() {
   const [liveFeeds, setLiveFeeds] = useState<LiveFeed[]>([]);
   const [activeFeedIndex, setActiveFeedIndex] = useState(0);
   const [showLiveGrid, setShowLiveGrid] = useState(false);
+  const [liveFeedMinimized, setLiveFeedMinimized] = useState(false);
+  const [saveSession, setSaveSession] = useState(false);
+  useEffect(() => { saveSessionRef.current = saveSession; }, [saveSession]);
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const [sessionListRefreshKey, setSessionListRefreshKey] = useState(0);
+  const [showPastSessions, setShowPastSessions] = useState(false);
   const [pendingLiveAlert, setPendingLiveAlert] = useState<{ room_id: string; user_name: string; team_name: string; lat?: number; lng?: number } | null>(null);
   const liveWsRefs = useRef<Map<string, WebSocket>>(new Map());
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const saveSessionRef = useRef(false); // mirror of saveSession state for use inside callbacks
   const [mapFlyTarget, setMapFlyTarget] = useState<{ lat: number; lng: number } | null>(null);
   const [selectedPOIType, setSelectedPOIType] = useState<POIType>("checkpoint");
   const [pendingPOI, setPendingPOI] = useState<POI | null>(null);
@@ -3163,9 +3476,13 @@ export default function DODMap() {
     routes: false,
     comms: false,
   });
-  if (window.innerWidth >= 128000) {
-    setIsFullscreen(false);
-  }
+  // This was a setState in render body which crashes React 19 — moved to a resize effect
+  useEffect(() => {
+    const handler = () => { if (window.innerWidth >= 128000) setIsFullscreen(false); };
+    window.addEventListener("resize", handler);
+    return () => window.removeEventListener("resize", handler);
+  }, []);
+
   const togglePanel = (key: keyof typeof panels) => {
     setPanels(p => ({ ...p, [key]: !p[key] }));
   };
@@ -3186,6 +3503,9 @@ export default function DODMap() {
       lat: lat ?? user.lat,
       lng: lng ?? user.lng,
     });
+    // Auto-expand the alerts panel so the SOS is immediately visible in the sidebar
+    setSidebarOpen(true);
+    setPanels(p => ({ ...p, alerts: true }));
   }, [focusUserOnMap]);
 
   const refreshRoutesAndPois = useCallback(async () => {
@@ -3828,6 +4148,23 @@ export default function DODMap() {
       console.log("[DRD WebRTC] ontrack fired, streams:", e.streams.length);
       if (e.streams[0]) {
         setLiveFeeds(prev => prev.map(f => f.room_id === meta.room_id ? { ...f, stream: e.streams[0] } : f));
+
+        // Start MediaRecorder when save was requested and we have a live stream
+        if (saveSessionRef.current && !recorderRef.current) {
+          try {
+            const mimeType = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus", "video/webm"].find(t => MediaRecorder.isTypeSupported(t)) ?? "";
+            const recorder = new MediaRecorder(e.streams[0], mimeType ? { mimeType } : undefined);
+            recordingChunksRef.current = [];
+            recorder.ondataavailable = (ev) => { if (ev.data.size > 0) recordingChunksRef.current.push(ev.data); };
+            recorder.start(2000); // collect chunks every 2 s
+            recorderRef.current = recorder;
+            // eslint-disable-next-line no-console
+            console.log("[DRD Recorder] Started recording, mimeType:", mimeType);
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[DRD Recorder] MediaRecorder failed to start:", err);
+          }
+        }
       }
     };
 
@@ -4600,6 +4937,15 @@ export default function DODMap() {
                   openSOSIncident(u, `${u.name} requested SOS support`, u.flagTime || new Date());
                 }
               }}
+              onResolve={(userId, isSOS) => {
+                if (isSOS) {
+                  // Clear the SOS flag so the marker stops pulsing + alert disappears
+                  handleFlag(userId, null);
+                }
+                // For offline/stale: the resolved Set in AlertsPanel already hides it locally.
+                // Also close any open SOS incident modal for this user.
+                setSosIncident(prev => prev?.userId === userId ? null : prev);
+              }}
             />
             <RoutesPanel
               routes={routes}
@@ -4644,6 +4990,13 @@ export default function DODMap() {
               onRemoveFromTeam={handleRemoveFromTeam}
               onLocate={handleLocateUser}
             // currentRole={currentUserRole}
+            />
+
+            {/* Past Live Sessions */}
+            <PastLiveSessionsPanel
+              visible={showPastSessions}
+              onToggle={() => setShowPastSessions(v => !v)}
+              refreshKey={sessionListRefreshKey}
             />
           </div>
         </div>
@@ -4722,11 +5075,36 @@ export default function DODMap() {
       {pendingLiveAlert && !showLiveGrid && (
         <LiveFeedAlertToast
           alert={pendingLiveAlert}
-          onView={() => {
+          saveSession={saveSession}
+          onSaveToggle={() => setSaveSession(v => !v)}
+          onView={async () => {
             const token = localStorage.getItem("access_token");
-            if (token) _joinLiveFeed(pendingLiveAlert, token);
+            const alertSnapshot = pendingLiveAlert; // capture before clearing
+            const willSave = saveSession;            // capture current toggle state
+
+            setPendingLiveAlert(null);              // dismiss toast immediately
+            if (token) _joinLiveFeed(alertSnapshot, token);
             setShowLiveGrid(true);
-            setPendingLiveAlert(null);
+            setLiveFeedMinimized(false);
+
+            // Create session record in backend
+            try {
+              const res = await api.startLiveSession({
+                room_id: alertSnapshot.room_id,
+                initiator_name: alertSnapshot.user_name,
+                team_name: alertSnapshot.team_name,
+                lat: alertSnapshot.lat,
+                lng: alertSnapshot.lng,
+                saved: willSave,
+              });
+              const sid = (res.data as { id?: string })?.id ?? null;
+              setActiveSessionId(sid);
+              // eslint-disable-next-line no-console
+              console.log("[DRD Session] Started, id:", sid, "saved:", willSave);
+            } catch (err) {
+              // eslint-disable-next-line no-console
+              console.warn("[DRD Session] startLiveSession failed:", err);
+            }
           }}
           onIgnore={() => {
             // Send rejection back through the video signaling room
@@ -4754,10 +5132,51 @@ export default function DODMap() {
         <LiveFeedGrid
           feeds={liveFeeds}
           activeIndex={activeFeedIndex}
+          minimized={liveFeedMinimized}
           onSetActive={setActiveFeedIndex}
           onMute={handleMuteFeed}
+          onMinimize={() => setLiveFeedMinimized(v => !v)}
           onInvite={handleInviteFeed}
-          onClose={(roomId) => roomId === "ALL" ? (setShowLiveGrid(false)) : _closeLiveFeed(roomId)}
+          onClose={async (roomId) => {
+            // Stop recorder and upload if recording was in progress
+            const recorder = recorderRef.current;
+            const sessionId = activeSessionId;
+            if (recorder && recorder.state !== "inactive") {
+              recorder.onstop = async () => {
+                const blob = new Blob(recordingChunksRef.current, { type: "video/webm" });
+                if (blob.size > 1000 && sessionId) {
+                  try {
+                    await api.uploadSessionVideo(sessionId, blob);
+                    // eslint-disable-next-line no-console
+                    console.log("[DRD Recorder] Video uploaded, size:", blob.size);
+                  } catch (err) {
+                    // eslint-disable-next-line no-console
+                    console.warn("[DRD Recorder] Upload failed:", err);
+                  }
+                }
+                recorderRef.current = null;
+                recordingChunksRef.current = [];
+              };
+              recorder.stop();
+            }
+            if (sessionId) {
+              api.endLiveSession(sessionId)
+                .then(() => {
+                  // eslint-disable-next-line no-console
+                  console.log("[DRD Session] Ended, id:", sessionId);
+                })
+                .catch(err => {
+                  // eslint-disable-next-line no-console
+                  console.warn("[DRD Session] endLiveSession failed:", err);
+                });
+              setActiveSessionId(null);
+              // Trigger past-sessions panel refresh so the new entry appears immediately
+              setSessionListRefreshKey(k => k + 1);
+            }
+            setSaveSession(false); // reset save toggle for next session
+            if (roomId === "ALL") setShowLiveGrid(false);
+            else _closeLiveFeed(roomId);
+          }}
           users={users}
         />
       )}

@@ -118,6 +118,21 @@ export const deleteZone = (id: string) => api.delete(`/api/v1/zones/${id}`);
 export const assignZone = (zoneId: string, data: object) =>
   api.post(`/api/v1/zones/${zoneId}/assign`, data);
 
+// ── Live Sessions ─────────────────────────────────────────────────────────────
+export const startLiveSession = (data: object) => api.post('/api/v1/live-sessions/start', data);
+export const endLiveSession = (id: string) => api.patch(`/api/v1/live-sessions/${id}/end`, {});
+export const listLiveSessions = (savedOnly?: boolean) => api.get('/api/v1/live-sessions', { params: savedOnly ? { saved_only: true } : undefined });
+export const uploadSessionVideo = (id: string, blob: Blob) => {
+  const form = new FormData();
+  form.append('video', blob, `live_${id}.webm`);
+  return api.post(`/api/v1/live-sessions/${id}/upload-video`, form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000,
+  });
+};
+export const getLiveSessionVideoUrl = (id: string) =>
+  `${(import.meta.env.VITE_API_URL as string || 'https://drd.nexventures.net/')}api/v1/live-sessions/${id}/video`;
+
 // ── Evidence ──────────────────────────────────────────────────────────────────
 export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/${poiId}`);
 export const getMessageEvidence = (messageId: string) => api.get(`/api/v1/evidence/message/${messageId}`);

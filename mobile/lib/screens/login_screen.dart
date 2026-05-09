@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
-import '../providers/location_provider.dart';
 import '../config/theme.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -84,15 +83,9 @@ class _LoginScreenState extends State<LoginScreen>
       _passwordController.text,
     );
     if (success && mounted) {
-      final userId = authProvider.user?.id;
-      if (userId != null) {
-        try {
-          await context.read<LocationProvider>().initialize(userId);
-        } catch (e) {
-          debugPrint('Location init error: $e');
-        }
-      }
-      if (mounted) Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
+      // Navigate immediately — let TacticalMapScreen._initTracking() handle GPS init
+      // in addPostFrameCallback so the map appears without the 5-second wait.
+      Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
     }
   }
 
