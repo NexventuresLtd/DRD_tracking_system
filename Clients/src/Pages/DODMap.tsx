@@ -381,16 +381,16 @@ const ENEMY_LABEL_KEYWORDS = /\b(ENEMY|CONTACT|IED|MINE|CNT|VEH\.|HOSTILE)\b/i;
 
 // Map mobile mark type keywords to their exact colors — must match _markTypes in tactical_map_screen.dart
 const MARK_COLOR_MAP: Array<{ re: RegExp; color: string }> = [
-  { re: /\b(ENEMY CONTACT|CNT)\b/i,  color: "#ef4444" },
-  { re: /\b(ENEMY VEH|VEH\.)\b/i,    color: "#dc2626" },
-  { re: /\b(IED|MINE)\b/i,            color: "#b91c1c" },
-  { re: /\b(SAFE ZONE|SAFE)\b/i,      color: "#22c55e" },
-  { re: /\b(CASUALTY|MED)\b/i,        color: "#f43f5e" },
-  { re: /\b(RV POINT|RV)\b/i,         color: "#3b82f6" },
-  { re: /\b(EXTRACTION|EXT)\b/i,       color: "#eab308" },
-  { re: /\b(SUPPLY|SUP)\b/i,          color: "#f97316" },
-  { re: /\b(OBS POST|OBS)\b/i,        color: "#64748b" },
-  { re: /\b(CMD POST|CMD)\b/i,        color: "#8b5cf6" },
+  { re: /\b(ENEMY CONTACT|CNT)\b/i, color: "#ef4444" },
+  { re: /\b(ENEMY VEH|VEH\.)\b/i, color: "#dc2626" },
+  { re: /\b(IED|MINE)\b/i, color: "#b91c1c" },
+  { re: /\b(SAFE ZONE|SAFE)\b/i, color: "#22c55e" },
+  { re: /\b(CASUALTY|MED)\b/i, color: "#f43f5e" },
+  { re: /\b(RV POINT|RV)\b/i, color: "#3b82f6" },
+  { re: /\b(EXTRACTION|EXT)\b/i, color: "#eab308" },
+  { re: /\b(SUPPLY|SUP)\b/i, color: "#f97316" },
+  { re: /\b(OBS POST|OBS)\b/i, color: "#64748b" },
+  { re: /\b(CMD POST|CMD)\b/i, color: "#8b5cf6" },
 ];
 
 function getMarkColor(label: string, fallback: string): string {
@@ -2728,7 +2728,13 @@ const TYPE_COLORS: Record<string, { color: string; bg: string }> = {
   ALERT: { color: "#ef4444", bg: "rgba(239,68,68,0.15)" },
 };
 
-function AllEventsModal({ onClose }: { onClose: () => void }) {
+function AllEventsModal({
+  onClose,
+  usersInfoRef,
+}: {
+  onClose: () => void;
+  usersInfoRef: React.MutableRefObject<Map<string, { name: string; role?: string }>>;
+}) {
   const [rows, setRows] = useState<Event[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
@@ -2984,8 +2990,8 @@ const BASE_WS = (() => {
   return url.replace(/^https/, "wss").replace(/^http/, "ws").replace(/\/$/, "");
 })();
 
-function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, onMinimize, minimized, users }:
-  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean; users: User[] }) {
+function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, onMinimize, minimized }:
+  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean }) {
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
 
   // Helper: register a video element and immediately attach any available stream
@@ -3006,7 +3012,7 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
         const el = videoRefs.current.get(f.room_id);
         if (el && el.srcObject !== f.stream) {
           el.srcObject = f.stream;
-          el.play().catch(() => {});
+          el.play().catch(() => { });
         }
       }
     });
@@ -3450,7 +3456,7 @@ export default function DODMap() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionListRefreshKey, setSessionListRefreshKey] = useState(0);
   const [showPastSessions, setShowPastSessions] = useState(false);
-  const [pendingLiveAlert, setPendingLiveAlert] = useState<{ room_id: string; user_name: string; team_name: string; lat?: number; lng?: number } | null>(null);
+  const [pendingLiveAlert, setPendingLiveAlert] = useState<{ room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number } | null>(null);
   const liveWsRefs = useRef<Map<string, WebSocket>>(new Map());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -4106,6 +4112,7 @@ export default function DODMap() {
         // Show commander alert immediately (don't auto-join — let commander decide)
         setPendingLiveAlert({
           room_id: m.room_id!,
+          user_id: m.user_id ?? "",
           user_name: m.user_name ?? "Field Unit",
           team_name: m.team_name ?? "",
           lat: m.lat,
@@ -5053,7 +5060,7 @@ export default function DODMap() {
       )}
 
       {showAllEvents && (
-        <AllEventsModal onClose={() => setShowAllEvents(false)} />
+        <AllEventsModal onClose={() => setShowAllEvents(false)} usersInfoRef={usersInfoRef} />
       )}
 
       {showCreateUser && (
@@ -5177,7 +5184,6 @@ export default function DODMap() {
             if (roomId === "ALL") setShowLiveGrid(false);
             else _closeLiveFeed(roomId);
           }}
-          users={users}
         />
       )}
 
