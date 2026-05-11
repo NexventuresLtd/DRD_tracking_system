@@ -2,8 +2,10 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
+import '../../providers/location_provider.dart';
 import '../../services/api_service.dart';
 
 class RoutePlanning extends StatefulWidget {
@@ -142,7 +144,12 @@ class _RoutePlanningState extends State<RoutePlanning> {
       FlutterMap(
         mapController: _mapCtrl,
         options: MapOptions(
-          initialCenter: LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+          initialCenter: (() {
+            final loc = context.read<LocationProvider>();
+            return loc.hasRealFix
+                ? LatLng(loc.latitude, loc.longitude)
+                : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+          })(),
           initialZoom: AppConstants.defaultZoom,
           onMapReady: () => setState(() => _mapReady = true),
           onTap: (_, point) {
@@ -261,7 +268,13 @@ class _RoutePlanningState extends State<RoutePlanning> {
           child: Column(mainAxisSize: MainAxisSize.min, children: [
             FloatingActionButton.small(
               heroTag: 'rp_center', backgroundColor: DRDTheme.surfaceColor,
-              onPressed: () => _mapCtrl.move(LatLng(AppConstants.defaultLat, AppConstants.defaultLng), AppConstants.defaultZoom),
+              onPressed: () {
+                final loc = context.read<LocationProvider>();
+                final center = loc.hasRealFix
+                    ? LatLng(loc.latitude, loc.longitude)
+                    : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+                _mapCtrl.move(center, AppConstants.defaultZoom);
+              },
               child: const Icon(Icons.center_focus_strong, color: Colors.white, size: 18),
             ),
             const SizedBox(height: 6),

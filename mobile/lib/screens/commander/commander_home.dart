@@ -26,6 +26,9 @@ class _CommanderHomeState extends State<CommanderHome> {
   void initState() {
     super.initState();
     _loadDashboardData();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      context.read<MessageProvider>().initialize();
+    });
   }
 
   Future<void> _loadDashboardData() async {

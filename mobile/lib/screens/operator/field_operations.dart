@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:provider/provider.dart';
 import '../../services/api_service.dart';
 import '../../config/theme.dart';
 import '../../config/constants.dart';
+import '../../providers/location_provider.dart';
 
 class FieldOperations extends StatefulWidget {
   const FieldOperations({super.key});
@@ -180,12 +182,16 @@ class _FieldOperationsState extends State<FieldOperations> {
                       height: 200,
                       child: FlutterMap(
                         options: MapOptions(
-                          initialCenter: LatLng(
-                            mission['waypoints']?.first['latitude'] ??
-                                AppConstants.defaultLat,
-                            mission['waypoints']?.first['longitude'] ??
-                                AppConstants.defaultLng,
-                          ),
+                          initialCenter: (() {
+                            final wp = mission['waypoints']?.first;
+                            if (wp != null) {
+                              return LatLng(wp['latitude'], wp['longitude']);
+                            }
+                            final loc = context.read<LocationProvider>();
+                            return loc.hasRealFix
+                                ? LatLng(loc.latitude, loc.longitude)
+                                : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+                          })(),
                           initialZoom: 13,
                           interactionOptions: const InteractionOptions(
                             flags: InteractiveFlag.none,
@@ -334,7 +340,12 @@ class _FieldOperationsState extends State<FieldOperations> {
   Widget _buildOperationsMap() {
     return FlutterMap(
       options: MapOptions(
-        initialCenter: LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+        initialCenter: (() {
+          final loc = context.read<LocationProvider>();
+          return loc.hasRealFix
+              ? LatLng(loc.latitude, loc.longitude)
+              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+        })(),
         initialZoom: 13,
       ),
       children: [

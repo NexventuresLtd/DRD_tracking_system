@@ -3,7 +3,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.websocket.manager import manager
 from app.utils.security import verify_access_token
 from datetime import datetime, timezone
-from uuid import UUID
+from uuid import UUID, uuid4
 
 router = APIRouter()
 
@@ -42,7 +42,7 @@ async def message_websocket(
                 message = {
                     "type": "new_message",
                     "data": {
-                        "id": str(UUID.uuid4()),
+                        "id": str(uuid4()),
                         "from_user_id": user_id,
                         "content": content,
                         "priority": message_data.get("priority", "normal"),

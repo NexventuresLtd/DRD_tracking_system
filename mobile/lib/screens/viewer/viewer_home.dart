@@ -240,10 +240,12 @@ class _ViewerHomeState extends State<ViewerHome> {
                 borderRadius: BorderRadius.circular(12),
                 child: FlutterMap(
                   options: MapOptions(
-                    initialCenter: LatLng(
-                      AppConstants.defaultLat,
-                      AppConstants.defaultLng,
-                    ),
+                    initialCenter: (() {
+                      final loc = context.read<LocationProvider>();
+                      return loc.hasRealFix
+                          ? LatLng(loc.latitude, loc.longitude)
+                          : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+                    })(),
                     initialZoom: 12,
                     interactionOptions: const InteractionOptions(
                       flags: InteractiveFlag.drag | InteractiveFlag.pinchZoom,
@@ -341,7 +343,12 @@ class _ViewerHomeState extends State<ViewerHome> {
         FlutterMap(
           mapController: _mapController,
           options: MapOptions(
-            initialCenter: LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+            initialCenter: (() {
+              final loc = context.read<LocationProvider>();
+              return loc.hasRealFix
+                  ? LatLng(loc.latitude, loc.longitude)
+                  : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+            })(),
             initialZoom: 13,
           ),
           children: [

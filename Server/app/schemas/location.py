@@ -51,7 +51,9 @@ class LocationResponse(BaseModel):
     status: str
     recorded_at: datetime
     created_at: datetime
-    
+    name: Optional[str] = None
+    team_name: Optional[str] = None
+
     class Config:
         from_attributes = True
 

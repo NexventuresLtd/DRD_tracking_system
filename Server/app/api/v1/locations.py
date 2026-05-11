@@ -7,6 +7,7 @@ from datetime import datetime
 
 from app.database import get_db
 from app.models.user import User
+from app.models.team import Team
 from app.schemas.location import (
     LocationCreate, LocationBatchCreate,
     LocationResponse, LocationHistoryResponse,
@@ -100,7 +101,21 @@ async def get_active_locations(
     """Get all active locations"""
     location_service = LocationService(db)
     locations = await location_service.get_active_locations(team_id=team_id)
-    
+
+    # Bulk-fetch user names and team names to avoid N+1 queries
+    user_ids = list({loc.user_id for loc in locations})
+    team_ids = list({loc.team_id for loc in locations if loc.team_id})
+    user_map: dict = {}
+    team_map: dict = {}
+    if user_ids:
+        user_result = await db.execute(select(User).where(User.id.in_(user_ids)))
+        for u in user_result.scalars().all():
+            user_map[u.id] = u.full_name or u.username
+    if team_ids:
+        team_result = await db.execute(select(Team).where(Team.id.in_(team_ids)))
+        for t in team_result.scalars().all():
+            team_map[t.id] = t.name
+
     return [
         LocationResponse(
             id=loc.id,
@@ -122,6 +137,8 @@ async def get_active_locations(
             status=loc.status,
             recorded_at=loc.recorded_at,
             created_at=loc.created_at,
+            name=user_map.get(loc.user_id),
+            team_name=team_map.get(loc.team_id) if loc.team_id else None,
         )
         for loc in locations
     ]

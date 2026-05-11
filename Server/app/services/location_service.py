@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.models.location import Location, LocationHistory
 from app.models.user import User
+from app.models.team import Team
 from app.schemas.location import LocationCreate, LocationBatchCreate, LocationResponse
 from app.utils.geo_utils import is_within_geofence
 from app.websocket.manager import manager
@@ -136,6 +137,16 @@ class LocationService:
 
         # Broadcast the updated location to websocket clients
         try:
+            # Resolve team name for the broadcast
+            team_name: str | None = None
+            if location.team_id:
+                team_result = await self.db.execute(
+                    select(Team).where(Team.id == location.team_id)
+                )
+                team_obj = team_result.scalar_one_or_none()
+                if team_obj:
+                    team_name = team_obj.name
+
             location_data = {
                 "id": str(location.id),
                 "user_id": str(location.user_id),
@@ -156,6 +167,8 @@ class LocationService:
                 "status": location.status,
                 "recorded_at": location.recorded_at.isoformat() if location.recorded_at else None,
                 "created_at": location.created_at.isoformat() if location.created_at else None,
+                "name": user.full_name or user.username,
+                "team_name": team_name,
             }
 
             # fire-and-forget broadcast; don't block main flow

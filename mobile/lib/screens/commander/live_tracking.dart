@@ -11,8 +11,10 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/location_provider.dart';
 
 import '../../services/api_service.dart';
+import '../../services/notification_service.dart';
 import '../../services/storage_service.dart';
 
 enum CmdMapType { tactical, standard, satellite, terrain, hybrid }
@@ -72,6 +74,8 @@ class _LiveTrackingState extends State<LiveTracking>
   Timer? _refreshTimer;
   WebSocketChannel? _locWs;
   WebSocketChannel? _evtWs;
+  WebSocketChannel? _liveAlertWs;
+  Map<String, dynamic>? _pendingLiveAlert;
   late AnimationController _pulseCtrl;
   final TextEditingController _msgCtrl = TextEditingController();
 
@@ -85,6 +89,7 @@ class _LiveTrackingState extends State<LiveTracking>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadData();
       _connectWS();
+      _connectLiveAlertWS();
     });
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 5),
@@ -123,10 +128,12 @@ class _LiveTrackingState extends State<LiveTracking>
           initialCenter = LatLng(firstLoc['latitude'], firstLoc['longitude']);
         }
       }
-      initialCenter ??= LatLng(
-        AppConstants.defaultLat,
-        AppConstants.defaultLng,
-      );
+      if (initialCenter == null) {
+        final loc = context.read<LocationProvider>();
+        initialCenter = loc.hasRealFix
+            ? LatLng(loc.latitude, loc.longitude)
+            : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+      }
 
       setState(() {
         _allLocations = locs;
@@ -138,11 +145,11 @@ class _LiveTrackingState extends State<LiveTracking>
       });
     } catch (_) {
       if (mounted) {
+        final loc = context.read<LocationProvider>();
         setState(() {
-          _initialCenter = LatLng(
-            AppConstants.defaultLat,
-            AppConstants.defaultLng,
-          );
+          _initialCenter = loc.hasRealFix
+              ? LatLng(loc.latitude, loc.longitude)
+              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
           _loading = false;
         });
       }
@@ -236,12 +243,54 @@ class _LiveTrackingState extends State<LiveTracking>
   int get _offline =>
       _allLocations.where((l) => l['status'] == 'offline').length;
 
+  void _connectLiveAlertWS() async {
+    final token = await _storage.getToken();
+    if (token == null) return;
+    try {
+      final wsBase = AppConstants.wsUrl.replaceAll('/ws', '');
+      _liveAlertWs = WebSocketChannel.connect(
+        Uri.parse('$wsBase/ws/video/alerts?token=$token'),
+      );
+      _liveAlertWs!.stream.listen(
+        (raw) {
+          try {
+            final msg = jsonDecode(raw as String) as Map<String, dynamic>;
+            if (!mounted) return;
+            if (msg['type'] == 'live_alert' && msg['room_id'] != null) {
+              NotificationService.instance.showLiveRequest(
+                msg['user_name'] as String? ?? 'Field Unit',
+                msg['team_name'] as String? ?? '',
+              );
+              setState(() => _pendingLiveAlert = msg);
+            } else if (msg['type'] == 'feed_ended') {
+              if (_pendingLiveAlert?['room_id'] == msg['room_id']) {
+                setState(() => _pendingLiveAlert = null);
+              }
+            }
+          } catch (_) {}
+        },
+        onDone: () {
+          _liveAlertWs = null;
+          if (mounted) Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
+        },
+        onError: (_) {
+          _liveAlertWs?.sink.close();
+          _liveAlertWs = null;
+          if (mounted) Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
+        },
+      );
+    } catch (_) {
+      Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
+    }
+  }
+
   @override
   void dispose() {
     _pulseCtrl.dispose();
     _refreshTimer?.cancel();
     _locWs?.sink.close();
     _evtWs?.sink.close();
+    _liveAlertWs?.sink.close();
     _msgCtrl.dispose();
     super.dispose();
   }
@@ -289,6 +338,13 @@ class _LiveTrackingState extends State<LiveTracking>
                 right: 0,
                 child: _buildSelectedPanel(),
               ),
+            if (_pendingLiveAlert != null)
+              Positioned(
+                top: topPad + 8,
+                left: 60,
+                right: 60,
+                child: _buildLiveAlertBanner(_pendingLiveAlert!),
+              ),
           ],
         ],
       ),
@@ -321,14 +377,90 @@ class _LiveTrackingState extends State<LiveTracking>
     );
   }
 
+  Widget _buildLiveAlertBanner(Map<String, dynamic> alert) {
+    final name = alert['user_name'] as String? ?? 'Field Unit';
+    final team = alert['team_name'] as String? ?? '';
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        decoration: BoxDecoration(
+          color: const Color(0xFFEF4444).withValues(alpha: 0.95),
+          borderRadius: BorderRadius.circular(10),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 8)],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.fiber_manual_record, color: Colors.white, size: 10),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    '🔴 LIVE REQUEST — $name${team.isNotEmpty ? ' · $team' : ''}',
+                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () => setState(() => _pendingLiveAlert = null),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Center(
+                        child: Text('DECLINE', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: GestureDetector(
+                    onTap: () {
+                      setState(() => _pendingLiveAlert = null);
+                      Navigator.pushNamed(context, '/commander/live-feed',
+                          arguments: {'room_id': alert['room_id']});
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: const Center(
+                        child: Text('JOIN FEED', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   Widget _buildMap() {
     final tile = _cmdTiles[_mapType]!;
     return FlutterMap(
       mapController: _mapCtrl,
       options: MapOptions(
-        initialCenter:
-            _initialCenter ??
-            LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+        initialCenter: _initialCenter ?? (() {
+          final loc = context.read<LocationProvider>();
+          return loc.hasRealFix
+              ? LatLng(loc.latitude, loc.longitude)
+              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+        })(),
         initialZoom: AppConstants.defaultZoom,
         onMapReady: () => setState(() => _mapReady = true),
         onTap: (_, _) => setState(() => _selected = null),

@@ -9,6 +9,7 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
+import '../../providers/location_provider.dart';
 import '../../services/api_service.dart';
 import '../../services/storage_service.dart';
 
@@ -76,7 +77,12 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
           initialCenter = LatLng(firstLoc['latitude'] as double, firstLoc['longitude'] as double);
         }
       }
-      initialCenter ??= LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+      if (initialCenter == null) {
+        final loc = context.read<LocationProvider>();
+        initialCenter = loc.hasRealFix
+            ? LatLng(loc.latitude, loc.longitude)
+            : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+      }
 
       setState(() {
         _teamMembers = teamLocations;
@@ -87,8 +93,11 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
     } catch (e) {
       debugPrint('Error loading team data: $e');
       if (mounted) {
+        final loc = context.read<LocationProvider>();
         setState(() {
-          _initialCenter = LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+          _initialCenter = loc.hasRealFix
+              ? LatLng(loc.latitude, loc.longitude)
+              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
           _loading = false;
         });
       }
@@ -109,8 +118,11 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
             if (uid == null || !mounted) return;
 
             final user = context.read<AuthProvider>().user;
-            final senderTeam = d['team'] as String?;
-            if (senderTeam != user?.teamName) return;
+            final senderTeamName = d['team_name'] as String?;
+            final senderTeamId = d['team_id'] as String?;
+            final myTeamId = user?.teamId;
+            if (myTeamId != null && senderTeamId != null && senderTeamId != myTeamId) return;
+            if (myTeamId == null && senderTeamName != user?.teamName) return;
 
             setState(() {
               final idx = _teamMembers.indexWhere((l) => l['user_id'] == uid);
@@ -274,7 +286,12 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
               : FlutterMap(
                   mapController: _mapCtrl,
                   options: MapOptions(
-                    initialCenter: _initialCenter ?? LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+                    initialCenter: _initialCenter ?? (() {
+                      final loc = context.read<LocationProvider>();
+                      return loc.hasRealFix
+                          ? LatLng(loc.latitude, loc.longitude)
+                          : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+                    })(),
                     initialZoom: 13,
                     onMapReady: () {},
                   ),

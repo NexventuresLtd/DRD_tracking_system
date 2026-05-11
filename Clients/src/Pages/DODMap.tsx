@@ -3591,7 +3591,13 @@ export default function DODMap() {
         visibleTo: p.visible_to_all ? ["ALL"] : [],
         shape: (p.tactical_shape || "diamond") as TacticalShape,
       }));
-      setPois(refreshedPOIs);
+      // Preserve any optimistic temp-POIs still waiting for their API save to resolve
+      setPois(prev => {
+        const pending = prev.filter(p => p.id.startsWith("poi_"));
+        const serverIds = new Set(refreshedPOIs.map(p => p.id));
+        const stillPending = pending.filter(p => !serverIds.has(p.id));
+        return [...refreshedPOIs, ...stillPending];
+      });
     } catch {
       // Keep current state if refresh fails.
     }
@@ -3742,7 +3748,12 @@ export default function DODMap() {
           visibleTo: p.visible_to_all ? ["ALL"] : [],
           shape: (p.tactical_shape || "diamond") as TacticalShape,
         }));
-        setPois(frontendPOIs);
+        setPois(prev => {
+          const pending = prev.filter(p => p.id.startsWith("poi_"));
+          const serverIds = new Set(frontendPOIs.map(p => p.id));
+          const stillPending = pending.filter(p => !serverIds.has(p.id));
+          return [...frontendPOIs, ...stillPending];
+        });
       }
 
       // Routes

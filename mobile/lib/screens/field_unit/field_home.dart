@@ -697,7 +697,12 @@ class _FieldHomeState extends State<FieldHome> with WidgetsBindingObserver {
             options: MapOptions(
               initialCenter: waypoints.isNotEmpty
                   ? LatLng(waypoints[0]['latitude'], waypoints[0]['longitude'])
-                  : LatLng(AppConstants.defaultLat, AppConstants.defaultLng),
+                  : (() {
+                      final loc = context.read<LocationProvider>();
+                      return loc.hasRealFix
+                          ? LatLng(loc.latitude, loc.longitude)
+                          : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+                    })(),
               initialZoom: 13,
             ),
             children: [

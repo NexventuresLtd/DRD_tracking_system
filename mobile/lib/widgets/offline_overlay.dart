@@ -134,7 +134,7 @@ class _OfflineOverlayState extends State<OfflineOverlay>
                     const SizedBox(height: 8),
                     AnimatedBuilder(
                       animation: _pulseCtrl,
-                      builder: (_, __) => _statusRow(
+                      builder: (_, _) => _statusRow(
                         Icons.sensors_rounded,
                         'Waiting for network…',
                         Color.lerp(
