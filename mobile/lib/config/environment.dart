@@ -1,11 +1,7 @@
 import 'package:flutter/foundation.dart';
 
 /// Environment configuration for different build variants
-enum BuildFlavor {
-  development,
-  staging,
-  production,
-}
+enum BuildFlavor { development, staging, production }
 
 class EnvironmentConfig {
   static late BuildFlavor buildFlavor;
@@ -16,7 +12,7 @@ class EnvironmentConfig {
   static void init([BuildFlavor? flavor]) {
     // Determine flavor: use provided flavor, or read from dart-define, or default to development
     flavor ??= _getFlavourFromEnv();
-    
+
     buildFlavor = flavor;
 
     switch (flavor) {
@@ -46,8 +42,11 @@ class EnvironmentConfig {
 
   /// Get flavor from dart-define environment variable
   static BuildFlavor _getFlavourFromEnv() {
-    const String flavor = String.fromEnvironment('FLAVOR', defaultValue: 'development');
-    
+    const String flavor = String.fromEnvironment(
+      'FLAVOR',
+      defaultValue: 'development',
+    );
+
     switch (flavor.toLowerCase()) {
       case 'staging':
         return BuildFlavor.staging;

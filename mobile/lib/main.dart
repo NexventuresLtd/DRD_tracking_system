@@ -11,14 +11,14 @@ import 'services/storage_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
+
   // Initialize environment - automatically detects flavor from --dart-define
   // or defaults to development if not specified
   EnvironmentConfig.init();
-  
+
   // Initialize services
   await StorageService().init();
-  
+
   runApp(
     MultiProvider(
       providers: [

@@ -544,7 +544,7 @@ function MapEventsHandler({
 function MapFlyController({ target }: { target: { lat: number; lng: number } | null }) {
   const map = useMap();
   useEffect(() => {
-          if (target) map.flyTo([target.lat, target.lng], 16, { duration: 1.2 });
+    if (target) map.flyTo([target.lat, target.lng], 16, { duration: 1.2 });
   }, [target, map]);
   return null;
 }
@@ -554,7 +554,7 @@ function RoutePath({ route }: { route: Route }) {
   const map = useMap();
 
   useEffect(() => {
-          if (route.coordinates.length >= 2 && map) {
+    if (route.coordinates.length >= 2 && map) {
       if (pathRef.current) {
         map.removeControl(pathRef.current);
       }

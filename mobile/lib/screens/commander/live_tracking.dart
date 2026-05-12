@@ -280,12 +280,14 @@ class _LiveTrackingState extends State<LiveTracking>
         },
         onDone: () {
           _liveAlertWs = null;
-          if (mounted) Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
+          if (mounted)
+            Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
         },
         onError: (_) {
           _liveAlertWs?.sink.close();
           _liveAlertWs = null;
-          if (mounted) Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
+          if (mounted)
+            Future.delayed(const Duration(seconds: 3), _connectLiveAlertWS);
         },
       );
     } catch (_) {
@@ -397,19 +399,32 @@ class _LiveTrackingState extends State<LiveTracking>
         decoration: BoxDecoration(
           color: const Color(0xFFEF4444).withValues(alpha: 0.95),
           borderRadius: BorderRadius.circular(10),
-          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 8)],
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.4),
+              blurRadius: 8,
+            ),
+          ],
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             Row(
               children: [
-                const Icon(Icons.fiber_manual_record, color: Colors.white, size: 10),
+                const Icon(
+                  Icons.fiber_manual_record,
+                  color: Colors.white,
+                  size: 10,
+                ),
                 const SizedBox(width: 6),
                 Expanded(
                   child: Text(
                     '🔴 LIVE REQUEST — $name${team.isNotEmpty ? ' · $team' : ''}',
-                    style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
               ],
@@ -427,7 +442,14 @@ class _LiveTrackingState extends State<LiveTracking>
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: const Center(
-                        child: Text('DECLINE', style: TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.bold)),
+                        child: Text(
+                          'DECLINE',
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -437,8 +459,11 @@ class _LiveTrackingState extends State<LiveTracking>
                   child: GestureDetector(
                     onTap: () {
                       setState(() => _pendingLiveAlert = null);
-                      Navigator.pushNamed(context, '/commander/live-feed',
-                          arguments: {'room_id': alert['room_id']});
+                      Navigator.pushNamed(
+                        context,
+                        '/commander/live-feed',
+                        arguments: {'room_id': alert['room_id']},
+                      );
                     },
                     child: Container(
                       padding: const EdgeInsets.symmetric(vertical: 6),
@@ -447,7 +472,14 @@ class _LiveTrackingState extends State<LiveTracking>
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: const Center(
-                        child: Text('JOIN FEED', style: TextStyle(color: Color(0xFFEF4444), fontSize: 10, fontWeight: FontWeight.bold)),
+                        child: Text(
+                          'JOIN FEED',
+                          style: TextStyle(
+                            color: Color(0xFFEF4444),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
                       ),
                     ),
                   ),
@@ -465,12 +497,14 @@ class _LiveTrackingState extends State<LiveTracking>
     return FlutterMap(
       mapController: _mapCtrl,
       options: MapOptions(
-        initialCenter: _initialCenter ?? (() {
-          final loc = context.read<LocationProvider>();
-          return loc.hasRealFix
-              ? LatLng(loc.latitude, loc.longitude)
-              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
-        })(),
+        initialCenter:
+            _initialCenter ??
+            (() {
+              final loc = context.read<LocationProvider>();
+              return loc.hasRealFix
+                  ? LatLng(loc.latitude, loc.longitude)
+                  : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+            })(),
         initialZoom: AppConstants.defaultZoom,
         onMapReady: () {
           setState(() => _mapReady = true);
