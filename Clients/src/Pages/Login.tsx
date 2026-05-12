@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  FiShield, FiUser, FiLock, FiEye, FiEyeOff,
+  FiUser, FiLock, FiEye, FiEyeOff,
   FiAlertTriangle,  FiRadio, FiWifi, FiNavigation, FiArrowRight
 } from "react-icons/fi";
 import * as api from "../services/api";
@@ -107,8 +107,8 @@ export default function Login() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3, duration: 0.5 }}
           >
-            <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center backdrop-blur-sm">
-              <FiShield size={22} className="text-blue-400" />
+            <div className="w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center">
+              <img src="/logo1.png" alt="DRD Logo" className="w-full h-full object-contain" />
             </div>
             <div>
               <div className="text-white font-bold text-lg tracking-[0.2em]">DRD TRACKING</div>
@@ -208,10 +208,10 @@ export default function Login() {
           {/* Mobile logo */}
           <div className="flex flex-col items-center mb-10 lg:hidden">
             <motion.div
-              className="w-16 h-16 rounded-2xl bg-blue-500/10 border border-blue-500/30 flex items-center justify-center mb-5"
+              className="w-20 h-20 rounded-2xl overflow-hidden flex items-center justify-center mb-5"
               whileHover={{ scale: 1.05 }}
             >
-              <FiShield size={30} className="text-blue-400" />
+              <img src="/logo1.png" alt="DRD Logo" className="w-full h-full object-contain" />
             </motion.div>
             <div className="text-white font-bold text-2xl tracking-[0.2em]">DRD TRACKING</div>
             <div className="text-[10px] tracking-[0.3em] text-white/25 mt-2">FIELD COORDINATION SYSTEM</div>

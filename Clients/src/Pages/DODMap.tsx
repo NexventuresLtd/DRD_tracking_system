@@ -636,8 +636,8 @@ function TopBar({
       </button>
 
       <div className="flex items-center gap-2 md:gap-3 mr-2 md:mr-4">
-        <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg bg-primary/20 border border-primary/50 flex items-center justify-center text-primary shrink-0">
-          <FiShield size={16} />
+        <div className="w-8 h-8 md:w-9 md:h-9 rounded-lg overflow-hidden flex items-center justify-center shrink-0">
+          <img src="/logo1.png" alt="DRD" className="w-full h-full object-contain" />
         </div>
         <div className="hidden sm:block">
           <div className="text-foreground font-bold text-xs md:text-sm leading-tight">DRD TRACKING</div>

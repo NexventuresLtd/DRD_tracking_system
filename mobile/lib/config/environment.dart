@@ -19,8 +19,8 @@ class EnvironmentConfig {
       case BuildFlavor.development:
         // For local development - configure based on your network
         // UPDATE THIS with your actual local IP or localhost
-        apiBaseUrl = 'http://192.168.1.69:8000/api/v1';
-        wsUrl = 'ws://192.168.1.69:8000/ws';
+        apiBaseUrl = 'https://staging.drd.nexventures.net/api/v1';
+        wsUrl = 'wss://staging.drd.nexventures.net/ws';
         break;
 
       case BuildFlavor.staging:
@@ -44,7 +44,7 @@ class EnvironmentConfig {
   static BuildFlavor _getFlavourFromEnv() {
     const String flavor = String.fromEnvironment(
       'FLAVOR',
-      defaultValue: 'development',
+      defaultValue: 'production',
     );
 
     switch (flavor.toLowerCase()) {

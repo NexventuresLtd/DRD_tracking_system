@@ -155,7 +155,7 @@ class _LoginScreenState extends State<LoginScreen>
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       const SizedBox(height: 16),
-                      // Shield icon with pulse
+                      // Logo with pulse animation
                       AnimatedBuilder(
                         animation: _pulseAnim,
                         builder: (_, child) => Transform.scale(
@@ -163,15 +163,10 @@ class _LoginScreenState extends State<LoginScreen>
                           child: child,
                         ),
                         child: Container(
-                          width: 72,
-                          height: 72,
+                          width: 100,
+                          height: 100,
                           decoration: BoxDecoration(
                             shape: BoxShape.circle,
-                            color: DRDTheme.primaryColor.withValues(alpha: 0.2),
-                            border: Border.all(
-                              color: DRDTheme.primaryColor.withValues(alpha: 0.6),
-                              width: 2,
-                            ),
                             boxShadow: [
                               BoxShadow(
                                 color: DRDTheme.primaryColor.withValues(alpha: 0.3),
@@ -180,10 +175,11 @@ class _LoginScreenState extends State<LoginScreen>
                               ),
                             ],
                           ),
-                          child: const Icon(
-                            Icons.shield_outlined,
-                            size: 36,
-                            color: Colors.white,
+                          child: Image.asset(
+                            'lib/assets/logo1.png',
+                            width: 100,
+                            height: 100,
+                            fit: BoxFit.contain,
                           ),
                         ),
                       ),

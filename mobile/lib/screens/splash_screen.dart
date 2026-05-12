@@ -165,14 +165,10 @@ class _SplashScreenState extends State<SplashScreen>
                   children: [
                     // ── Logo ───────────────────────────────────────────────
                     Container(
-                      width: 90,
-                      height: 90,
+                      width: 110,
+                      height: 110,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        border: Border.all(
-                          color: DRDTheme.primaryColor.withValues(alpha: 0.5),
-                          width: 3,
-                        ),
                         boxShadow: [
                           BoxShadow(
                             color: DRDTheme.primaryColor.withValues(alpha: 0.3),
@@ -181,10 +177,11 @@ class _SplashScreenState extends State<SplashScreen>
                           ),
                         ],
                       ),
-                      child: const Icon(
-                        Icons.shield,
-                        size: 46,
-                        color: DRDTheme.primaryColor,
+                      child: Image.asset(
+                        'lib/assets/logo1.png',
+                        width: 110,
+                        height: 110,
+                        fit: BoxFit.contain,
                       ),
                     ),
                     const SizedBox(height: 28),

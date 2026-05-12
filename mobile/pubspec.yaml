@@ -111,10 +111,9 @@ flutter:
         - asset: lib/assets/fonts/Poppins-SemiBold.ttf
           weight: 600
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+  assets:
+    - lib/assets/Roundel_of_Rwanda.svg
+    - lib/assets/logo1.png
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images
