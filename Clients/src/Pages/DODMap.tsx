@@ -4038,7 +4038,25 @@ export default function DODMap() {
           }
         }
 
-        setUsers(frontendUsers);
+        // Merge with existing state — don't wipe users that already have live GPS data
+        setUsers(prev => {
+          return frontendUsers.map(newUser => {
+            const existing = prev.find(u => u.user_id === newUser.user_id);
+            if (!existing) return newUser;
+            const hasNewGPS = newUser.lat !== 0 || newUser.lng !== 0;
+            return {
+              ...newUser,
+              // Keep current map position if new data has no GPS yet
+              lat: hasNewGPS ? newUser.lat : existing.lat,
+              lng: hasNewGPS ? newUser.lng : existing.lng,
+              status: hasNewGPS ? newUser.status : existing.status,
+              lastUpdate: hasNewGPS ? newUser.lastUpdate : existing.lastUpdate,
+              // Always preserve flags set by WS events (SOS, safe, trouble)
+              flag: existing.flag,
+              flagTime: (existing as { flagTime?: Date }).flagTime,
+            };
+          });
+        });
       }
 
       // POIs (empty = no POIs deployed yet)

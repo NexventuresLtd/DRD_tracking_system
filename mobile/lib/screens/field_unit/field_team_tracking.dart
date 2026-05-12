@@ -327,36 +327,73 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
                         final status = member['status'] as String? ?? 'offline';
                         final statusColor = _getStatusColor(status, member['last_update']);
 
+                        final name = (member['name'] as String?) ?? '?';
+                        final initials = name
+                            .split(' ')
+                            .where((w) => w.isNotEmpty)
+                            .take(2)
+                            .map((w) => w[0].toUpperCase())
+                            .join();
+                        final size = isSelected ? 48.0 : 40.0;
+
                         return Marker(
                           point: LatLng(lat, lng),
+                          width: 64,
+                          height: size + 22,
                           child: GestureDetector(
                             onTap: () => _flyToMember(member),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: statusColor,
-                                border: Border.all(
-                                  color: isSelected ? Colors.yellow : Colors.transparent,
-                                  width: isSelected ? 3 : 0,
-                                ),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: statusColor.withValues(alpha: 0.5),
-                                    blurRadius: 8,
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                // Name label above marker
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+                                  decoration: BoxDecoration(
+                                    color: Colors.black.withValues(alpha: 0.7),
+                                    borderRadius: BorderRadius.circular(4),
+                                    border: Border.all(color: statusColor.withValues(alpha: 0.6), width: 1),
                                   ),
-                                ],
-                              ),
-                              width: isSelected ? 48 : 40,
-                              height: isSelected ? 48 : 40,
-                              child: Center(
-                                child: Text(
-                                  (member['name'] as String? ?? '?').substring(0, 1).toUpperCase(),
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.bold,
+                                  child: Text(
+                                    name.length > 10 ? '${name.substring(0, 9)}…' : name,
+                                    style: TextStyle(
+                                      color: statusColor,
+                                      fontSize: 8,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    maxLines: 1,
                                   ),
                                 ),
-                              ),
+                                const SizedBox(height: 2),
+                                // Circle with initials
+                                Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: statusColor,
+                                    border: Border.all(
+                                      color: isSelected ? Colors.yellow : Colors.transparent,
+                                      width: isSelected ? 3 : 0,
+                                    ),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: statusColor.withValues(alpha: 0.5),
+                                        blurRadius: 8,
+                                      ),
+                                    ],
+                                  ),
+                                  width: size,
+                                  height: size,
+                                  child: Center(
+                                    child: Text(
+                                      initials.isNotEmpty ? initials : '?',
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                         );

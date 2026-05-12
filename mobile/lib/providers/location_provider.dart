@@ -99,6 +99,21 @@ class LocationProvider extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Call when the app goes to background / is closed.
+  Future<void> markOffline() async {
+    if (_userId == null) return;
+    try {
+      await _api.post('/locations/offline', {});
+    } catch (_) {}
+  }
+
+  /// Call when the app returns to foreground — resumes GPS and flips status back to active.
+  Future<void> onResume() async {
+    if (_userId == null) return;
+    if (!_isTracking) await startTracking();
+    if (_hasRealFix) await _sendToServer();
+  }
+
   Future<void> _onGpsUpdate(Map<String, dynamic> data) async {
     final lat = (data['latitude'] as num?)?.toDouble();
     final lng = (data['longitude'] as num?)?.toDouble();

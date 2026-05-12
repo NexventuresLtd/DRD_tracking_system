@@ -18,12 +18,6 @@ class LocationService {
     }
     if (permission == LocationPermission.deniedForever) return false;
 
-    // On Android, request background (always) permission so tracking continues
-    // when app is in background. On Android 10+ this shows a separate dialog.
-    if (Platform.isAndroid && permission == LocationPermission.whileInUse) {
-      permission = await Geolocator.requestPermission();
-    }
-
     return true;
   }
 
@@ -94,6 +88,7 @@ class LocationService {
   Future<Position> getCurrentPosition() async {
     return Geolocator.getCurrentPosition(
       desiredAccuracy: LocationAccuracy.high,
+      timeLimit: const Duration(seconds: 10),
     );
   }
 

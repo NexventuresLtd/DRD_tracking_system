@@ -665,21 +665,30 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     if (!mounted) return;
     final auth = context.read<AuthProvider>();
     final teamId = auth.user?.teamId;
+    final userId = auth.user?.id;
 
-    // Each request is independent — a 404 on one never kills the others.
     final results = await Future.wait([
       _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations').catchError((_) => null),
-      _api.get(teamId != null ? '/routes?is_active=true&team_id=$teamId' : '/routes?is_active=true').catchError((_) => null),
+      _api.get('/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}').catchError((_) => null),
+      if (teamId != null) _api.get('/routes?is_active=true&team_id=$teamId').catchError((_) => null),
       _api.get('/pois?status=active').catchError((_) => null),
       _api.get('/route-follow-sessions/me').catchError((_) => null),
     ]);
 
     if (!mounted) return;
+    final hasTeam = teamId != null;
+    final userRoutes = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final teamRoutes = hasTeam ? ((results[2] as List?)?.cast<Map<String, dynamic>>() ?? []) : <Map<String, dynamic>>[];
+    final seen = <dynamic>{for (final r in userRoutes) r['id']};
+    final mergedRoutes = [...userRoutes, ...teamRoutes.where((r) => seen.add(r['id']))];
+    final poisResult = results[hasTeam ? 3 : 2];
+    final sessionResult = results[hasTeam ? 4 : 3];
+
     setState(() {
       _teamLocations = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      _myRoutes      = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      _sharedPois    = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      final session  = results[3];
+      _myRoutes      = mergedRoutes;
+      _sharedPois    = (poisResult as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final session  = sessionResult;
       if (session is Map<String, dynamic>) _activeFollowSession = session;
     });
   }
@@ -1383,6 +1392,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             urlTemplate: tile['overlay'] as String,
             userAgentPackageName: 'com.drd.fieldops',
           ),
+        // Approach line: dashed from current position to first waypoint
+        PolylineLayer(polylines: _buildApproachLines(myPos)),
         // Route polylines
         PolylineLayer(polylines: _buildRouteLines()),
         // Active route: OSRM road polyline when available, otherwise straight line
@@ -1941,6 +1952,30 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       );
     }
     return polylines;
+  }
+
+  /// Dashed amber line from current GPS position to the first waypoint of each route.
+  List<Polyline> _buildApproachLines(LatLng myPos) {
+    final lines = <Polyline>[];
+    for (final route in _myRoutes) {
+      final wps = route['waypoints'] as List?;
+      if (wps == null || wps.isEmpty) continue;
+      final first = wps.first as Map<String, dynamic>;
+      final lat = (first['latitude'] as num?)?.toDouble();
+      final lng = (first['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) continue;
+      final firstWp = LatLng(lat, lng);
+      // Skip if already at the first waypoint (within ~20 m)
+      final dist = _distanceKm(myPos.latitude, myPos.longitude, lat, lng);
+      if (dist != null && dist < 0.02) continue;
+      lines.add(Polyline(
+        points: [myPos, firstWp],
+        color: Colors.amberAccent.withValues(alpha: 0.8),
+        strokeWidth: 2.5,
+        isDotted: true,
+      ));
+    }
+    return lines;
   }
 
   List<Marker> _buildWaypointMarkers() {

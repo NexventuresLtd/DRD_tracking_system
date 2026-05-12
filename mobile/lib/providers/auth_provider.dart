@@ -20,8 +20,17 @@ class AuthProvider extends ChangeNotifier {
     if (isLoggedIn) {
       _user = await _authService.getCurrentUser();
       _isAuthenticated = true;
+      notifyListeners();
+      // Refresh profile from server to get latest team info
+      _authService.refreshUserProfile().then((fresh) {
+        if (fresh != null) {
+          _user = fresh;
+          notifyListeners();
+        }
+      }).catchError((_) {});
+    } else {
+      notifyListeners();
     }
-    notifyListeners();
   }
 
   Future<bool> login(String username, String password) async {

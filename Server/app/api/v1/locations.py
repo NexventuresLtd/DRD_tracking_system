@@ -18,6 +18,26 @@ from app.middleware.auth import get_current_user, require_operator
 
 router = APIRouter(prefix="/locations", tags=["Locations"])
 
+
+@router.post("/offline", status_code=status.HTTP_200_OK)
+async def mark_offline(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Immediately mark the current user as offline (called when app closes)."""
+    result = await db.execute(
+        select(Location)
+        .where(Location.user_id == current_user.id)
+        .order_by(Location.created_at.desc())
+        .limit(1)
+    )
+    location = result.scalar_one_or_none()
+    if location:
+        location.status = "offline"
+        await db.commit()
+    return {"status": "offline"}
+
+
 @router.post("/", response_model=LocationResponse, status_code=status.HTTP_201_CREATED)
 async def update_location(
     data: LocationCreate,

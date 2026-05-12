@@ -66,28 +66,32 @@ class _FieldMapScreenState extends State<FieldMapScreen>
 
   Future<void> _loadMapData() async {
     if (!mounted) return;
-    final teamId = context.read<AuthProvider>().user?.teamId;
+    final user = context.read<AuthProvider>().user;
+    final teamId = user?.teamId;
+    final userId = user?.id;
 
     try {
-      final results = await Future.wait([
-        _apiService.get(
-          teamId != null ? '/locations?team_id=$teamId' : '/locations',
-        ),
-        _apiService.get('/routes'),
+      // Fetch routes by user and by team, then merge (deduplicated)
+      final futures = await Future.wait([
+        _apiService.get(teamId != null ? '/locations?team_id=$teamId' : '/locations'),
+        _apiService.get('/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}'),
+        if (teamId != null) _apiService.get('/routes?is_active=true&team_id=$teamId'),
         _apiService.get('/pois'),
       ]);
 
       if (mounted) {
+        final hasTeam = teamId != null;
+        final userRoutes = (futures[1] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+        final teamRoutes = hasTeam ? ((futures[2] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? []) : <Map<String, dynamic>>[];
+        final poisResult = futures[hasTeam ? 3 : 2];
+
+        final seen = <dynamic>{for (final r in userRoutes) r['id']};
+        final merged = [...userRoutes, ...teamRoutes.where((r) => seen.add(r['id']))];
+
         setState(() {
-          _teamLocations =
-              (results[0] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
-              [];
-          _activeRoutes =
-              (results[1] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
-              [];
-          _pois =
-              (results[2] as List<dynamic>?)?.cast<Map<String, dynamic>>() ??
-              [];
+          _teamLocations = (futures[0] as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
+          _activeRoutes  = merged;
+          _pois          = (poisResult as List<dynamic>?)?.cast<Map<String, dynamic>>() ?? [];
         });
       }
     } catch (_) {}

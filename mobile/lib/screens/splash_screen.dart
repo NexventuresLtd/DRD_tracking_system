@@ -86,18 +86,16 @@ class _SplashScreenState extends State<SplashScreen>
       return;
     }
 
-    // ── 3. Background location permission (Android 10+) ─────────────────────
-    // Only request "always" when user has granted foreground first.
-    if (permission == LocationPermission.whileInUse) {
-      setState(() => _statusText = 'REQUESTING BACKGROUND LOCATION…');
-      permission = await Geolocator.requestPermission();
-      // If they decline background-only, proceed with foreground — don't block.
-    }
-
-    // ── 4. All good — proceed ────────────────────────────────────────────────
+    // ── 3. All good — proceed ────────────────────────────────────────────────
     if (!mounted) return;
     setState(() => _statusText = 'LOADING…');
-    await _navigateToApp();
+    // Hard timeout: if _navigateToApp takes more than 5s, force navigate to login
+    await _navigateToApp().timeout(
+      const Duration(seconds: 5),
+      onTimeout: () {
+        if (mounted) Navigator.pushReplacementNamed(context, '/login');
+      },
+    );
   }
 
   Future<void> _navigateToApp() async {
@@ -109,16 +107,15 @@ class _SplashScreenState extends State<SplashScreen>
         ? authProvider.getHomeRoute()
         : '/login';
 
+    // Start GPS in the background — never block navigation on GPS acquisition.
+    // The LocationProvider will update asynchronously once a fix arrives.
     if (authProvider.isAuthenticated) {
       final userId = authProvider.user?.id;
       if (userId != null) {
-        try {
-          await context
-              .read<LocationProvider>()
-              .initialize(userId, teamId: authProvider.user?.teamId);
-        } catch (e) {
-          debugPrint('Location init error: $e');
-        }
+        context
+            .read<LocationProvider>()
+            .initialize(userId, teamId: authProvider.user?.teamId)
+            .catchError((e) => debugPrint('Location init error: $e'));
       }
     }
 

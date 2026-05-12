@@ -67,4 +67,23 @@ class AuthService {
     final token = await getToken();
     return token != null && token.isNotEmpty;
   }
+
+  /// Fetch latest user profile from server (including team info) and save to storage.
+  Future<UserModel?> refreshUserProfile() async {
+    final token = await getToken();
+    if (token == null) return null;
+    final response = await http.get(
+      Uri.parse('${AppConstants.baseUrl}/auth/me'),
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer $token',
+      },
+    );
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      await _storage.saveUserData(data);
+      return UserModel.fromJson(data);
+    }
+    return null;
+  }
 }

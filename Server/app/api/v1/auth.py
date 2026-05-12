@@ -76,9 +76,21 @@ async def logout(
 
 @router.get("/me")
 async def get_current_user_info(
-    user: User = Depends(get_current_user)
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get current user information"""
+    """Get current user information including team membership"""
+    from sqlalchemy import select
+    from app.models.team import Team, TeamMember
+
+    tm_result = await db.execute(
+        select(TeamMember, Team)
+        .join(Team, TeamMember.team_id == Team.id)
+        .where(TeamMember.user_id == user.id, TeamMember.is_active == True)
+        .limit(1)
+    )
+    tm_row = tm_result.first()
+
     return {
         "id": str(user.id),
         "email": user.email,
@@ -90,6 +102,9 @@ async def get_current_user_info(
         "is_verified": user.is_verified,
         "last_login": user.last_login.isoformat() if user.last_login else None,
         "created_at": user.created_at.isoformat(),
+        "team_id": str(tm_row[0].team_id) if tm_row else None,
+        "team_name": tm_row[1].name if tm_row else None,
+        "team_role": tm_row[0].role if tm_row else None,
     }
 
 @router.put("/change-password")

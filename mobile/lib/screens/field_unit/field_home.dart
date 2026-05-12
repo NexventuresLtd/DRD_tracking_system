@@ -83,29 +83,39 @@ class _FieldHomeState extends State<FieldHome> with WidgetsBindingObserver {
       final user = Provider.of<AuthProvider>(context, listen: false).user;
       if (user == null) return;
 
-      // Load routes assigned to the team
+      final allRoutes = <Map<String, dynamic>>[];
+
+      // Fetch routes assigned directly to this user
+      final userRoutes = await _apiService.get('/routes?user_id=${user.id}&is_active=true');
+      if (userRoutes is List) {
+        allRoutes.addAll(List<Map<String, dynamic>>.from(userRoutes));
+      }
+
+      // Also fetch routes assigned to the user's team (if they have one)
       final teamId = user.teamId;
-      if (teamId == null) return;
-      final routes = await _apiService.get('/routes?team_id=$teamId&is_active=true');
-      if (routes is List && routes.isNotEmpty) {
-        // Get all routes for the team
-        final routeList = List<Map<String, dynamic>>.from(routes);
-
-        // First, try to find a route assigned to this specific user
-        final userRoute = routeList.firstWhere(
-          (r) => (r['assigned_to'] as List?)?.contains(user.id) ?? false,
-          orElse: () => <String, dynamic>{},
-        );
-
-        // If no user-specific route, show the first team route
-        final missionToShow = userRoute.isNotEmpty ? userRoute : (routeList.isNotEmpty ? routeList.first : null);
-
-        if (mounted) {
-          setState(() {
-            _teamRoutes = routeList;
-            if (missionToShow != null) _currentMission = missionToShow;
-          });
+      if (teamId != null) {
+        final teamRoutes = await _apiService.get('/routes?team_id=$teamId&is_active=true');
+        if (teamRoutes is List) {
+          for (final r in teamRoutes) {
+            final route = r as Map<String, dynamic>;
+            // Avoid duplicates
+            if (!allRoutes.any((existing) => existing['id'] == route['id'])) {
+              allRoutes.add(route);
+            }
+          }
         }
+      }
+
+      if (allRoutes.isNotEmpty && mounted) {
+        // Prefer a route assigned directly to this user, else show first team route
+        final userSpecific = allRoutes.firstWhere(
+          (r) => r['assigned_user_id'] == user.id,
+          orElse: () => allRoutes.first,
+        );
+        setState(() {
+          _teamRoutes = allRoutes;
+          _currentMission = userSpecific;
+        });
       }
     } catch (e) {
       debugPrint('Error loading mission: $e');
