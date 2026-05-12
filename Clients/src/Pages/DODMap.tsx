@@ -4438,8 +4438,12 @@ export default function DODMap() {
 
     const unsubVideo = videoAlertWS.subscribe((msg: unknown) => {
       const m = msg as { type?: string; room_id?: string; user_id?: string; user_name?: string; team_name?: string; lat?: number; lng?: number; feeds?: LiveFeed[] };
+
       if (m.type === "live_alert" && m.room_id) {
-        // Show commander alert immediately (don't auto-join — let commander decide)
+        // Ignore spurious alerts where commander is mistakenly stored as the broadcaster
+        const isCommander = m.user_id === "commander" || m.user_name === "Commander";
+        if (isCommander) return;
+
         setPendingLiveAlert({
           room_id: m.room_id!,
           user_id: m.user_id ?? "",
@@ -4451,13 +4455,18 @@ export default function DODMap() {
         setEvents(prev => [{
           id: `live_${Date.now()}`, time: new Date(), type: "ALERT",
           user: m.user_name ?? "Field Unit", team: (m.team_name as Team) ?? "Team Alpha",
-          event: `${m.user_name} is requesting LIVE FEED`, location: m.lat ? `${Number(m.lat).toFixed(4)}, ${Number(m.lng).toFixed(4)}` : "Field",
+          event: `${m.user_name} is requesting LIVE FEED`,
+          location: m.lat ? `${Number(m.lat).toFixed(4)}, ${Number(m.lng).toFixed(4)}` : "Field",
         }, ...prev]);
+
       } else if (m.type === "feed_ended" && m.room_id) {
         _closeLiveFeed(m.room_id);
+
       } else if (m.type === "active_feeds" && m.feeds) {
-        m.feeds.forEach(f => _joinLiveFeed(f, token));
-        if (m.feeds.length > 0) setShowLiveGrid(true);
+        // Only join feeds that come from real field units — filter out stale commander entries
+        const realFeeds = m.feeds.filter(f => f.user_id !== "commander" && f.user_name !== "Commander");
+        realFeeds.forEach(f => _joinLiveFeed(f, token));
+        if (realFeeds.length > 0) setShowLiveGrid(true);
       }
     });
 
@@ -4520,7 +4529,7 @@ export default function DODMap() {
     };
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ type: "join", room_id: meta.room_id, user_id: "commander", user_name: "Commander", team_name: "Command" }));
+      ws.send(JSON.stringify({ type: "join", room_id: meta.room_id, user_id: "commander", user_name: "Commander", team_name: "Command", role: "viewer" }));
     };
 
     ws.onmessage = async (ev) => {
@@ -5289,7 +5298,7 @@ export default function DODMap() {
             </div>
 
             <ActiveSoldiersPanel
-              users={users}
+              users={filteredUsers}
               expanded={panels.activeSoldiers}
               onToggle={() => togglePanel("activeSoldiers")}
               onLocate={focusUserOnMap}
