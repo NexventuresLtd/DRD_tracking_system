@@ -340,13 +340,13 @@ function getTacticalShapeSVG(shape: TacticalShape, color: string, size: number =
 }
 
 function createUserMarkerHTML(user: User, isSelected: boolean): string {
-  const col = TEAM_COLORS[user.group].primary;
+  const col = TEAM_COLORS[user.group]?.primary ?? "#3b82f6";
   const size = isSelected ? 42 : 32;
   const roleIcon = user.role ? ROLE_ICONS[user.role] || "" : "";
   const isDanger = user.status === "offline" || user.flag === "help";
   const isStale = user.status === "stale";
   const borderColor = isDanger ? "#ef4444" : isStale ? "#f59e0b" : col;
-  const bgColor = isDanger ? "rgba(239,68,68,0.15)" : isStale ? "rgba(245,158,11,0.12)" : TEAM_COLORS[user.group].bg;
+  const bgColor = isDanger ? "rgba(239,68,68,0.15)" : isStale ? "rgba(245,158,11,0.12)" : (TEAM_COLORS[user.group]?.bg ?? "rgba(59,130,246,0.15)");
   const textColor = isDanger ? "#ef4444" : isStale ? "#f59e0b" : col;
   const shadow = isDanger
     ? `0 0 10px rgba(239,68,68,0.5), 0 2px 8px rgba(0,0,0,0.4)`
@@ -544,7 +544,7 @@ function MapEventsHandler({
 function MapFlyController({ target }: { target: { lat: number; lng: number } | null }) {
   const map = useMap();
   useEffect(() => {
-    if (target) map.flyTo([target.lat, target.lng], 16, { duration: 1.2 });
+          if (target) map.flyTo([target.lat, target.lng], 16, { duration: 1.2 });
   }, [target, map]);
   return null;
 }
@@ -554,7 +554,7 @@ function RoutePath({ route }: { route: Route }) {
   const map = useMap();
 
   useEffect(() => {
-    if (route.coordinates.length >= 2 && map) {
+          if (route.coordinates.length >= 2 && map) {
       if (pathRef.current) {
         map.removeControl(pathRef.current);
       }
@@ -920,7 +920,7 @@ function SelectedUserPanel({
     );
   }
 
-  const col = TEAM_COLORS[user.group].primary;
+  const col = TEAM_COLORS[user.group]?.primary ?? "#3b82f6";
 
   return (
     <div className="bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden">
@@ -930,7 +930,7 @@ function SelectedUserPanel({
           <div className="flex items-center gap-2 md:gap-3 mb-3">
             <div
               className="w-9 h-9 md:w-10 md:h-10 rounded-full flex items-center justify-center text-xs md:text-sm font-bold flex-shrink-0"
-              style={{ backgroundColor: TEAM_COLORS[user.group].bg, border: `2px solid ${col}`, color: col }}
+              style={{ backgroundColor: TEAM_COLORS[user.group]?.bg ?? "rgba(59,130,246,0.15)", border: `2px solid ${col}`, color: col }}
             >
               {user.name.replace(" ", "").substring(0, 2).toUpperCase()}
             </div>
@@ -1536,7 +1536,7 @@ function EventsLog({ events, onViewAll }: { events: Event[]; onViewAll: () => vo
                   >
                     {ev.user}
                   </td>
-                  <td className="px-1.5 md:px-2 py-1 md:py-1.5 whitespace-nowrap truncate max-w-[60px]" style={{ color: TEAM_COLORS[ev.team].primary }}>{ev.team}</td>
+                  <td className="px-1.5 md:px-2 py-1 md:py-1.5 whitespace-nowrap truncate max-w-[60px]" style={{ color: TEAM_COLORS[ev.team as Team]?.primary ?? "#3b82f6" }}>{ev.team}</td>
                   <td
                     className="px-1.5 md:px-2 py-1 md:py-1.5 truncate max-w-[100px]"
                     style={{ color: isDangerRow ? "#fca5a5" : "#94a3b8", fontWeight: isDangerRow ? 600 : 400 }}
@@ -3052,26 +3052,31 @@ interface LiveFeed {
 
 const STUN = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }] };
 const BASE_WS = (() => {
-  const url = (import.meta.env.VITE_API_URL as string) || "https://drd.nexventures.net/";
-  return url.replace(/^https/, "wss").replace(/^http/, "ws").replace(/\/$/, "");
+  const raw = (import.meta.env.VITE_WS_URL as string) || (import.meta.env.VITE_API_URL as string) || "https://drd.nexventures.net/";
+  const url = new URL(raw, window.location.origin);
+  return url.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:");
+})();
+
+const API_ORIGIN = (() => {
+  const raw = (import.meta.env.VITE_API_URL as string) || "https://drd.nexventures.net/";
+  return new URL(raw, window.location.origin).origin;
 })();
 
 function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, onMinimize, minimized }:
   { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean }) {
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
+  const [fullscreen, setFullscreen] = useState(false);
 
-  // Helper: register a video element and immediately attach any available stream
   const setVideoRef = (roomId: string, el: HTMLVideoElement | null, stream?: MediaStream) => {
     if (!el) return;
     videoRefs.current.set(roomId, el);
     const src = stream ?? feeds.find(f => f.room_id === roomId)?.stream;
     if (src && el.srcObject !== src) {
       el.srcObject = src;
-      el.play().catch(() => { /* autoplay blocked — user interaction required */ });
+      el.play().catch(() => { });
     }
   };
 
-  // Also re-sync streams whenever feeds list updates (handles deferred track arrival)
   useEffect(() => {
     feeds.forEach(f => {
       if (f.stream) {
@@ -3087,8 +3092,9 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
   if (feeds.length === 0) return null;
   const main = feeds[activeIndex] ?? feeds[0];
   const sides = feeds.filter((_, i) => i !== activeIndex);
+  const hasStream = !!main.stream;
 
-  // ── Minimized PiP mode ──────────────────────────────────────────────────────
+  // ── Minimized PiP ──────────────────────────────────────────────────────────
   if (minimized) {
     return (
       <div
@@ -3096,12 +3102,14 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
         style={{ width: 200, height: 130, border: "2px solid rgba(239,68,68,0.5)" }}
         onClick={onMinimize}
       >
-        <video
-          ref={el => setVideoRef(main.room_id, el, main.stream)}
-          autoPlay playsInline muted
-          className="w-full h-full object-cover"
-        />
-        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent" />
+        <video ref={el => setVideoRef(main.room_id, el, main.stream)} autoPlay playsInline muted className="w-full h-full object-cover" />
+        {!hasStream && (
+          <div className="absolute inset-0 bg-slate-950 flex flex-col items-center justify-center gap-1">
+            <div className="w-4 h-4 border-2 border-red-500/40 border-t-red-500 rounded-full animate-spin" />
+            <span className="text-red-400 text-[8px] font-bold">CONNECTING</span>
+          </div>
+        )}
+        <div className="absolute inset-0 bg-gradient-to-t from-black/70 to-transparent pointer-events-none" />
         <div className="absolute top-1.5 left-2 flex items-center gap-1">
           <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
           <span className="text-[9px] font-bold text-red-400">LIVE</span>
@@ -3111,107 +3119,120 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
             <div className="text-white font-bold text-[10px] truncate">{main.user_name}</div>
             <div className="text-white/50 text-[8px]">{main.team_name}</div>
           </div>
-          <div className="w-6 h-6 rounded-full bg-blue-500/30 flex items-center justify-center text-[8px] text-blue-300 font-bold">
-            ▲
-          </div>
+          <div className="w-6 h-6 rounded-full bg-blue-500/30 flex items-center justify-center text-[8px] text-blue-300 font-bold">▲</div>
         </div>
       </div>
     );
   }
 
+  // ── Shared header bar ───────────────────────────────────────────────────────
+  const headerBar = (
+    <div className="flex items-center gap-3 px-4 py-2 bg-red-950/90 border-b border-red-500/30 flex-shrink-0">
+      <span className="flex items-center gap-1.5">
+        <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+        <span className="text-red-400 text-[10px] font-bold tracking-widest">LIVE</span>
+      </span>
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-6 h-6 rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center text-[9px] font-bold text-red-300 flex-shrink-0">
+          {(main.user_name || "?").split(" ").map((w: string) => w[0] ?? "").join("").slice(0, 2).toUpperCase()}
+        </div>
+        <span className="text-white font-bold text-xs truncate">{main.user_name}</span>
+        <span className="text-white/50 text-[10px] truncate">{main.team_name}</span>
+        {main.lat && <span className="text-white/30 text-[9px] hidden md:inline">{main.lat.toFixed(4)}, {main.lng?.toFixed(4)}</span>}
+      </div>
+      <div className="flex-1" />
+      {!hasStream && <span className="text-yellow-400 text-[9px] font-semibold animate-pulse mr-1">CONNECTING...</span>}
+      <button onClick={() => onInvite(main.room_id)} className="px-2 py-1 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors hidden sm:flex items-center gap-1">
+        <FiUsers size={10} /> Invite
+      </button>
+      <button onClick={() => setFullscreen(f => !f)} className="px-2 py-1 rounded text-[10px] font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors flex items-center gap-1" title={fullscreen ? "Exit fullscreen" : "Fullscreen"}>
+        {fullscreen ? <FiChevronDown size={10} /> : <FiMaximize2 size={10} />}
+        {fullscreen ? "Exit" : "Full"}
+      </button>
+      <button onClick={onMinimize} className="px-2 py-1 rounded text-[10px] font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors flex items-center gap-1">
+        <FiChevronDown size={10} /> Min
+      </button>
+      <button onClick={() => onClose("ALL")} className="px-2 py-1 rounded text-[10px] font-semibold bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors flex items-center gap-1">
+        <FiX size={10} /> End
+      </button>
+    </div>
+  );
+
+  // ── Main video area ─────────────────────────────────────────────────────────
+  const mainVideo = (
+    <div className="flex-1 relative bg-slate-950">
+      <video ref={el => setVideoRef(main.room_id, el, main.stream)} autoPlay playsInline className="w-full h-full object-cover" />
+      {!hasStream && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-slate-950">
+          <div className="w-10 h-10 border-2 border-red-500/30 border-t-red-500 rounded-full animate-spin" />
+          <div className="text-center">
+            <div className="text-white font-bold text-sm">{main.user_name}</div>
+            <div className="text-slate-400 text-xs mt-0.5">Establishing secure connection...</div>
+          </div>
+        </div>
+      )}
+      <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-full" style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(4px)" }}>
+        <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+        <span className="text-white font-bold text-xs">{main.user_name}</span>
+      </div>
+      <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">
+        <div className="text-white/40 text-[9px]">{main.lat && `${main.lat.toFixed(5)}, ${main.lng?.toFixed(5)}`}</div>
+        <div className="flex gap-1.5">
+          <button onClick={() => onMute(main.room_id)} className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+            style={{ background: main.muted ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.1)" }}>
+            {main.muted ? <FiAlertCircle size={14} color="#ef4444" /> : <FiActivity size={14} color="white" />}
+          </button>
+          <button onClick={() => onClose(main.room_id)} className="w-8 h-8 rounded-full flex items-center justify-center bg-red-500/40 hover:bg-red-500/60 transition-colors border border-red-500/30">
+            <FiX size={14} color="white" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const sidesPanel = sides.length > 0 ? (
+    <div className="w-40 flex flex-col gap-1 p-1 bg-black/90 overflow-y-auto custom-scrollbar">
+      {sides.map(feed => {
+        const realIdx = feeds.indexOf(feed);
+        return (
+          <div key={feed.room_id} className="relative rounded overflow-hidden cursor-pointer border border-transparent hover:border-blue-500/60 transition-colors aspect-video"
+            onClick={() => onSetActive(realIdx)}>
+            <video ref={el => setVideoRef(feed.room_id, el, feed.stream)} autoPlay playsInline muted className="w-full h-full object-cover" />
+            {!feed.stream && <div className="absolute inset-0 bg-slate-900 flex items-center justify-center"><div className="w-3 h-3 border border-red-500/40 border-t-red-500 rounded-full animate-spin" /></div>}
+            <div className="absolute top-0.5 left-1 flex items-center gap-0.5">
+              <span className="w-1 h-1 rounded-full bg-red-500 animate-pulse" />
+              <span className="text-white text-[7px] font-bold drop-shadow">{feed.user_name}</span>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  ) : null;
+
+  // ── Fullscreen mode ─────────────────────────────────────────────────────────
+  if (fullscreen) {
+    return (
+      <div className="fixed inset-0 bg-black z-[6000] flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
+        {headerBar}
+        <div className="flex flex-1 overflow-hidden">{mainVideo}{sidesPanel}</div>
+      </div>
+    );
+  }
+
+  // ── Default: floating panel (map stays visible) ─────────────────────────────
   return (
-    <div className="fixed inset-0 bg-black z-[6000] flex flex-col" style={{ fontFamily: "'Poppins', sans-serif" }}>
-
-      {/* Always-visible requester info banner */}
-      <div className="flex items-center gap-3 px-4 py-2 bg-red-950/80 border-b border-red-500/30">
-        <span className="flex items-center gap-1.5">
-          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-          <span className="text-red-400 text-[10px] font-bold tracking-widest">LIVE</span>
-        </span>
-        <div className="flex items-center gap-2">
-          <div className="w-6 h-6 rounded-full bg-red-500/20 border border-red-500/50 flex items-center justify-center text-[9px] font-bold text-red-300">
-            {main.user_name.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase()}
-          </div>
-          <div>
-            <span className="text-white font-bold text-sm">{main.user_name}</span>
-            <span className="text-white/50 text-xs ml-2">{main.team_name}</span>
-            {main.lat && <span className="text-white/30 text-[10px] ml-2">{main.lat.toFixed(4)}, {main.lng?.toFixed(4)}</span>}
-          </div>
-        </div>
-        <div className="flex-1" />
-        <button onClick={() => onInvite(main.room_id)} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-blue-500/20 text-blue-300 border border-blue-500/30 hover:bg-blue-500/30 transition-colors">
-          <FiUsers size={11} className="inline mr-1" /> Invite
-        </button>
-        <button onClick={onMinimize} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-white/10 text-white/60 hover:bg-white/20 transition-colors" title="Minimize">
-          <FiChevronDown size={11} className="inline mr-1" /> Minimize
-        </button>
-        <button onClick={() => onClose("ALL")} className="px-2.5 py-1 rounded text-[10px] font-semibold bg-red-500/20 text-red-400 border border-red-500/30 hover:bg-red-500/30 transition-colors">
-          <FiX size={11} className="inline mr-1" /> End All
-        </button>
-      </div>
-
-      <div className="flex flex-1 overflow-hidden">
-        {/* Main feed */}
-        <div className="flex-1 relative bg-slate-950">
-          <video
-            ref={el => setVideoRef(main.room_id, el, main.stream)}
-            autoPlay playsInline
-            className="w-full h-full object-cover"
-          />
-
-          {/* Speaker name — always visible at top of main feed */}
-          <div className="absolute top-3 left-3 flex items-center gap-2 px-3 py-1.5 rounded-full"
-            style={{ background: "rgba(0,0,0,0.65)", border: "1px solid rgba(255,255,255,0.1)", backdropFilter: "blur(4px)" }}>
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
-            <span className="text-white font-bold text-sm">{main.user_name}</span>
-            <span className="text-white/50 text-xs">· {main.team_name}</span>
-          </div>
-
-          {/* Bottom controls */}
-          <div className="absolute bottom-0 left-0 right-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">
-            <div className="text-white/50 text-[10px]">
-              {main.lat && <span>{main.lat.toFixed(5)}, {main.lng?.toFixed(5)}</span>}
-            </div>
-            <div className="flex gap-2">
-              <button onClick={() => onMute(main.room_id)}
-                className="w-9 h-9 rounded-full flex items-center justify-center transition-colors"
-                style={{ background: main.muted ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.15)", border: main.muted ? "1px solid rgba(239,68,68,0.5)" : "1px solid rgba(255,255,255,0.1)" }}
-                title={main.muted ? "Unmute" : "Mute"}>
-                {main.muted ? <FiAlertCircle size={16} color="#ef4444" /> : <FiActivity size={16} color="white" />}
-              </button>
-              <button onClick={() => onClose(main.room_id)} className="w-9 h-9 rounded-full flex items-center justify-center bg-red-500/40 hover:bg-red-500/60 transition-colors border border-red-500/40">
-                <FiX size={16} color="white" />
-              </button>
-            </div>
-          </div>
-        </div>
-
-        {/* Side feeds */}
-        {sides.length > 0 && (
-          <div className="w-52 flex flex-col gap-1 p-1 bg-black/90 overflow-y-auto custom-scrollbar">
-            {sides.map((feed) => {
-              const realIdx = feeds.indexOf(feed);
-              return (
-                <div key={feed.room_id} className="relative rounded-lg overflow-hidden cursor-pointer border-2 border-transparent hover:border-blue-500/60 transition-colors aspect-video"
-                  onClick={() => onSetActive(realIdx)}>
-                  <video ref={el => setVideoRef(feed.room_id, el, feed.stream)} autoPlay playsInline muted className="w-full h-full object-cover" />
-                  {/* Speaker name on side feed */}
-                  <div className="absolute top-1 left-1.5 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
-                    <span className="text-white text-[8px] font-bold drop-shadow">{feed.user_name}</span>
-                  </div>
-                  <div className="absolute bottom-0 left-0 right-0 px-2 py-1 bg-black/70 flex items-center justify-between">
-                    <span className="text-white/60 text-[8px] truncate">{feed.team_name}</span>
-                    <button onClick={e => { e.stopPropagation(); onMute(feed.room_id); }} className="ml-1 shrink-0 w-5 h-5 rounded-full flex items-center justify-center bg-white/10">
-                      {feed.muted ? <FiAlertCircle size={10} color="#ef4444" /> : <FiActivity size={10} color="white" />}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+    <div
+      className="fixed z-[6000] flex flex-col rounded-xl overflow-hidden shadow-2xl"
+      style={{
+        bottom: 24, right: 24,
+        width: 400, height: 300,
+        border: "1px solid rgba(239,68,68,0.4)",
+        fontFamily: "'Poppins', sans-serif",
+        background: "#0f172a",
+      }}
+    >
+      {headerBar}
+      <div className="flex flex-1 overflow-hidden">{mainVideo}{sidesPanel}</div>
     </div>
   );
 }
@@ -3328,19 +3349,28 @@ interface LiveSessionRecord {
 function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boolean; onToggle: () => void; refreshKey: number }) {
   const [sessions, setSessions] = useState<LiveSessionRecord[]>([]);
   const [loading, setLoading] = useState(false);
-  const [filter, setFilter] = useState<"all" | "saved">("all");
+  const [filter, setFilter] = useState<"incoming" | "all" | "saved">("incoming");
   const [playingSession, setPlayingSession] = useState<LiveSessionRecord | null>(null);
 
   const reload = () => {
     setLoading(true);
     api.listLiveSessions(filter === "saved")
-      .then(res => setSessions(res.data as LiveSessionRecord[]))
+      .then(res => {
+        const list = res.data as LiveSessionRecord[];
+        setSessions(filter === "incoming" ? list.filter(s => !s.ended_at) : list);
+      })
       .catch(() => setSessions([]))
       .finally(() => setLoading(false));
   };
 
   // Reload when panel opens, filter changes, OR when refreshKey changes (session ended externally)
   useEffect(() => { if (visible) reload(); }, [visible, filter, refreshKey]);
+
+  useEffect(() => {
+    if (!visible || filter !== "incoming") return;
+    const timer = setInterval(reload, 8000);
+    return () => clearInterval(timer);
+  }, [visible, filter, refreshKey]);
 
   const fmtDuration = (s?: number | null) => {
     if (!s) return "—";
@@ -3357,7 +3387,7 @@ function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boo
             className="flex-1 flex items-center gap-2 px-3 py-2.5 bg-white/5 hover:bg-white/8 text-foreground cursor-pointer text-xs font-semibold tracking-wide transition-colors"
           >
             <FiActivity size={13} className="text-slate-400" />
-            <span className="flex-1 text-left">Past Live Sessions</span>
+            <span className="flex-1 text-left">Live Sessions</span>
             <span className="text-slate-500 text-xs" style={{ transform: visible ? "rotate(180deg)" : "rotate(0deg)", display: "inline-block" }}>▾</span>
           </button>
           {visible && (
@@ -3374,18 +3404,20 @@ function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boo
         {visible && (
           <div className="p-2">
             <div className="flex gap-1 mb-2 rounded-md bg-white/5 p-1 text-[10px]">
-              {(["all", "saved"] as const).map(f => (
+              {(["incoming", "all", "saved"] as const).map(f => (
                 <button key={f} onClick={() => setFilter(f)}
                   className="flex-1 rounded px-2 py-1 font-semibold transition-colors"
                   style={{ backgroundColor: filter === f ? "rgba(59,130,246,0.22)" : "transparent", color: filter === f ? "#60a5fa" : "#94a3b8" }}>
-                  {f === "all" ? "All" : "Saved Only"}
+                  {f === "incoming" ? "Incoming" : f === "all" ? "All" : "Saved Only"}
                 </button>
               ))}
             </div>
 
             {loading && <div className="py-4 text-center text-slate-500 text-[10px]">Loading…</div>}
             {!loading && sessions.length === 0 && (
-              <div className="py-4 text-center text-slate-500 text-[10px]">No sessions recorded yet</div>
+              <div className="py-4 text-center text-slate-500 text-[10px]">
+                {filter === "incoming" ? "No incoming sessions right now" : "No sessions recorded yet"}
+              </div>
             )}
 
             <div className="flex flex-col gap-1.5 max-h-64 overflow-y-auto custom-scrollbar">
@@ -3458,7 +3490,7 @@ function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boo
             {playingSession.has_video ? (
               <div className="bg-black">
                 <video
-                  src={`${(import.meta.env.VITE_API_URL as string || 'https://drd.nexventures.net/')}api/v1/live-sessions/${playingSession.id}/video?token=${localStorage.getItem('access_token') ?? ''}`}
+                  src={`${API_ORIGIN}/api/v1/live-sessions/${playingSession.id}/video?token=${localStorage.getItem('access_token') ?? ''}`}
                   controls
                   autoPlay
                   className="w-full max-h-[60vh]"
@@ -3531,7 +3563,7 @@ export default function DODMap() {
   const [selectedPOIType, setSelectedPOIType] = useState<POIType>("checkpoint");
   const [pendingPOI, setPendingPOI] = useState<POI | null>(null);
   const [showPOIModal, setShowPOIModal] = useState(false);
-  const [mapView, setMapView] = useState<MapViewType>("standard");
+  const [mapView, setMapView] = useState<MapViewType>("dark");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isConnected, setIsConnected] = useState(false);

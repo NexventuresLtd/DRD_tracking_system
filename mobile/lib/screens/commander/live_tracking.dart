@@ -81,6 +81,22 @@ class _LiveTrackingState extends State<LiveTracking>
   late AnimationController _pulseCtrl;
   final TextEditingController _msgCtrl = TextEditingController();
 
+  LatLng _currentLocationCenter() {
+    final loc = _locProvider ?? context.read<LocationProvider>();
+    if (loc.hasRealFix) {
+      return LatLng(loc.latitude, loc.longitude);
+    }
+    return LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+  }
+
+  void _recenterOnCurrentLocation({double? zoom}) {
+    if (!_mapReady) return;
+    final center = _currentLocationCenter();
+    _mapCtrl.move(center, zoom ?? _mapCtrl.camera.zoom);
+    _initialCenter = center;
+    _centeredOnUser = true;
+  }
+
   @override
   void initState() {
     super.initState();
@@ -121,23 +137,7 @@ class _LiveTrackingState extends State<LiveTracking>
           .where((n) => n.isNotEmpty)
           .toList();
 
-      // Set initial center to first active location, or default
-      LatLng? initialCenter;
-      if (locs.isNotEmpty) {
-        final firstLoc = locs.firstWhere(
-          (l) => l['latitude'] != null && l['longitude'] != null,
-          orElse: () => {},
-        );
-        if (firstLoc.isNotEmpty) {
-          initialCenter = LatLng(firstLoc['latitude'], firstLoc['longitude']);
-        }
-      }
-      if (initialCenter == null) {
-        final loc = context.read<LocationProvider>();
-        initialCenter = loc.hasRealFix
-            ? LatLng(loc.latitude, loc.longitude)
-            : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
-      }
+      final initialCenter = _currentLocationCenter();
 
       setState(() {
         _allLocations = locs;
@@ -149,11 +149,8 @@ class _LiveTrackingState extends State<LiveTracking>
       });
     } catch (_) {
       if (mounted) {
-        final loc = context.read<LocationProvider>();
         setState(() {
-          _initialCenter = loc.hasRealFix
-              ? LatLng(loc.latitude, loc.longitude)
-              : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
+          _initialCenter = _currentLocationCenter();
           _loading = false;
         });
       }
@@ -248,13 +245,10 @@ class _LiveTrackingState extends State<LiveTracking>
       _allLocations.where((l) => l['status'] == 'offline').length;
 
   void _autoCenter() {
-    if (!mounted || _centeredOnUser) return;
+    if (!mounted) return;
     final loc = _locProvider;
     if (loc != null && loc.hasRealFix && _mapReady) {
-      _centeredOnUser = true;
-      if (_initialCenter == null) {
-        _mapCtrl.move(LatLng(loc.latitude, loc.longitude), AppConstants.defaultZoom);
-      }
+      _recenterOnCurrentLocation();
     }
   }
 
@@ -478,7 +472,10 @@ class _LiveTrackingState extends State<LiveTracking>
               : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
         })(),
         initialZoom: AppConstants.defaultZoom,
-        onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
+        onMapReady: () {
+          setState(() => _mapReady = true);
+          _recenterOnCurrentLocation(zoom: AppConstants.defaultZoom);
+        },
         onTap: (_, _) => setState(() => _selected = null),
       ),
       children: [
@@ -844,12 +841,7 @@ class _LiveTrackingState extends State<LiveTracking>
       mainAxisSize: MainAxisSize.min,
       children: [
         _fab('center', Icons.center_focus_strong, DRDTheme.primaryColor, () {
-          if (_allLocations.isNotEmpty) {
-            final l = _allLocations.first;
-            final lat = (l['latitude'] as num?)?.toDouble();
-            final lng = (l['longitude'] as num?)?.toDouble();
-            if (lat != null && lng != null) _mapCtrl.move(LatLng(lat, lng), 13);
-          }
+          _recenterOnCurrentLocation(zoom: AppConstants.defaultZoom);
         }),
         const SizedBox(height: 6),
         _fab('zin', Icons.add, DRDTheme.surfaceColor, () {
@@ -864,7 +856,10 @@ class _LiveTrackingState extends State<LiveTracking>
           }
         }),
         const SizedBox(height: 6),
-        _fab('ref', Icons.refresh, DRDTheme.surfaceColor, _loadData),
+        _fab('ref', Icons.refresh, DRDTheme.surfaceColor, () async {
+          await _loadData();
+          _recenterOnCurrentLocation(zoom: AppConstants.defaultZoom);
+        }),
       ],
     );
   }

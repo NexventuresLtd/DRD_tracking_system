@@ -1,6 +1,7 @@
 const BASE_WS = (() => {
-  const url = import.meta.env.VITE_API_URL || 'https://drd.nexventures.net/';
-  return url.replace(/^https/, 'wss').replace(/^http/, 'ws');
+  const raw = import.meta.env.VITE_WS_URL || import.meta.env.VITE_API_URL || 'https://drd.nexventures.net/';
+  const url = new URL(raw, window.location.origin);
+  return url.origin.replace(/^https:/, 'wss:').replace(/^http:/, 'ws:');
 })();
 console.log(`WebSocket Base URL: ${BASE_WS}`);
 type Handler<T = unknown> = (data: T) => void;

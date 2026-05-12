@@ -1,9 +1,9 @@
+import 'environment.dart';
+
 class AppConstants {
-  // API Endpoints
-  // static const String baseUrl = 'http://192.168.1.69:8000/api/v1';
-  // static const String wsUrl = 'ws://192.168.1.69:8000/ws';
-  static const String baseUrl = 'https://drd.nexventures.net/api/v1';
-  static const String wsUrl = 'wss://drd.nexventures.net/ws';
+  // API Endpoints - sourced from environment config
+  static String get baseUrl => EnvironmentConfig.getApiBaseUrl();
+  static String get wsUrl => EnvironmentConfig.getWsUrl();
   // Storage Keys
   static const String tokenKey = 'access_token';
   static const String refreshTokenKey = 'refresh_token';

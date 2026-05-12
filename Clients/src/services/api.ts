@@ -131,7 +131,7 @@ export const uploadSessionVideo = (id: string, blob: Blob) => {
   });
 };
 export const getLiveSessionVideoUrl = (id: string) =>
-  `${(import.meta.env.VITE_API_URL as string || 'https://drd.nexventures.net/')}api/v1/live-sessions/${id}/video`;
+  `${new URL((import.meta.env.VITE_API_URL as string) || 'https://drd.nexventures.net/', window.location.origin).origin}/api/v1/live-sessions/${id}/video`;
 
 // ── Evidence ──────────────────────────────────────────────────────────────────
 export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/${poiId}`);

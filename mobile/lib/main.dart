@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'app.dart';
+import 'config/environment.dart';
 import 'providers/auth_provider.dart';
 import 'providers/location_provider.dart';
 import 'providers/team_provider.dart';
@@ -10,6 +11,10 @@ import 'services/storage_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize environment - automatically detects flavor from --dart-define
+  // or defaults to development if not specified
+  EnvironmentConfig.init();
   
   // Initialize services
   await StorageService().init();
