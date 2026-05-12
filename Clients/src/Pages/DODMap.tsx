@@ -23,6 +23,7 @@ import {
   FiUser, FiBell, FiMaximize2, FiArrowRight, FiHome, FiTruck, FiMap,
   FiChevronLeft, FiChevronRight,
   FiMenu, FiHexagon, FiLock, FiMoon,
+  FiMic, FiMicOff, FiVolume2, FiVolumeX,
 } from "react-icons/fi";
 import {
   MdLocalHospital, MdDirectionsCar,
@@ -3243,7 +3244,8 @@ interface LiveFeed {
   lng?: number;
   stream?: MediaStream;
   pc?: RTCPeerConnection;
-  muted?: boolean;
+  muted?: boolean;       // incoming audio muted
+  micMuted?: boolean;    // commander's own mic muted for this feed
 }
 
 const STUN = { iceServers: [{ urls: "stun:stun.l.google.com:19302" }, { urls: "stun:stun1.l.google.com:19302" }] };
@@ -3258,8 +3260,8 @@ const API_ORIGIN = (() => {
   return new URL(raw, window.location.origin).origin;
 })();
 
-function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvite, onMinimize, minimized }:
-  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean }) {
+function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onToggleMic, onClose, onInvite, onMinimize, minimized }:
+  { feeds: LiveFeed[]; activeIndex: number; onSetActive: (i: number) => void; onMute: (roomId: string) => void; onToggleMic: (roomId: string) => void; onClose: (roomId: string) => void; onInvite: (roomId: string) => void; onMinimize: () => void; minimized: boolean }) {
   const videoRefs = useRef<Map<string, HTMLVideoElement>>(new Map());
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -3374,9 +3376,18 @@ function LiveFeedGrid({ feeds, activeIndex, onSetActive, onMute, onClose, onInvi
       <div className="absolute bottom-0 left-0 right-0 p-3 bg-gradient-to-t from-black/80 to-transparent flex items-end justify-between">
         <div className="text-white/40 text-[9px]">{main.lat && `${main.lat.toFixed(5)}, ${main.lng?.toFixed(5)}`}</div>
         <div className="flex gap-1.5">
+          {/* Commander mic — speak to the field unit */}
+          <button onClick={() => onToggleMic(main.room_id)}
+            className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+            title={main.micMuted ? "Unmute mic" : "Mute mic"}
+            style={{ background: main.micMuted ? "rgba(239,68,68,0.5)" : "rgba(34,197,94,0.3)", border: `1px solid ${main.micMuted ? "rgba(239,68,68,0.6)" : "rgba(34,197,94,0.6)"}` }}>
+            {main.micMuted ? <FiMicOff size={14} color="#ef4444" /> : <FiMic size={14} color="#22c55e" />}
+          </button>
+          {/* Mute incoming audio */}
           <button onClick={() => onMute(main.room_id)} className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
-            style={{ background: main.muted ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.1)" }}>
-            {main.muted ? <FiAlertCircle size={14} color="#ef4444" /> : <FiActivity size={14} color="white" />}
+            style={{ background: main.muted ? "rgba(239,68,68,0.4)" : "rgba(255,255,255,0.15)", border: "1px solid rgba(255,255,255,0.1)" }}
+            title={main.muted ? "Unmute incoming" : "Mute incoming"}>
+            {main.muted ? <FiVolumeX size={14} color="#ef4444" /> : <FiVolume2 size={14} color="white" />}
           </button>
           <button onClick={() => onClose(main.room_id)} className="w-8 h-8 rounded-full flex items-center justify-center bg-red-500/40 hover:bg-red-500/60 transition-colors border border-red-500/30">
             <FiX size={14} color="white" />
@@ -3768,7 +3779,8 @@ export default function DODMap() {
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sessionListRefreshKey, setSessionListRefreshKey] = useState(0);
   const [showPastSessions, setShowPastSessions] = useState(false);
-  const [pendingLiveAlert, setPendingLiveAlert] = useState<{ room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number } | null>(null);
+  const [pendingLiveAlerts, setPendingLiveAlerts] = useState<Array<{ room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number }>>([]);
+  const commanderMicRef = useRef<MediaStream | null>(null);
   const liveWsRefs = useRef<Map<string, WebSocket>>(new Map());
   const recorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
@@ -4491,13 +4503,17 @@ export default function DODMap() {
         const isCommander = m.user_id === "commander" || m.user_name === "Commander";
         if (isCommander) return;
 
-        setPendingLiveAlert({
-          room_id: m.room_id!,
-          user_id: m.user_id ?? "",
-          user_name: m.user_name ?? "Field Unit",
-          team_name: m.team_name ?? "",
-          lat: m.lat,
-          lng: m.lng,
+        // Queue the alert — allows multiple simultaneous incoming feeds
+        setPendingLiveAlerts(prev => {
+          if (prev.some(a => a.room_id === m.room_id)) return prev; // already queued
+          return [...prev, {
+            room_id: m.room_id!,
+            user_id: m.user_id ?? "",
+            user_name: m.user_name ?? "Field Unit",
+            team_name: m.team_name ?? "",
+            lat: m.lat,
+            lng: m.lng,
+          }];
         });
         setEvents(prev => [{
           id: `live_${Date.now()}`, time: new Date(), type: "ALERT",
@@ -4508,6 +4524,8 @@ export default function DODMap() {
 
       } else if (m.type === "feed_ended" && m.room_id) {
         _closeLiveFeed(m.room_id);
+        // Also dismiss any pending toast for this room if soldier cancelled
+        setPendingLiveAlerts(prev => prev.filter(a => a.room_id !== m.room_id));
 
       } else if (m.type === "active_feeds" && m.feeds) {
         // Only join feeds that come from real field units — filter out stale commander entries
@@ -4559,12 +4577,36 @@ export default function DODMap() {
 
     const pc = new RTCPeerConnection(STUN);
 
-    // Explicitly declare receive-only transceivers so the peer connection knows
-    // we expect incoming video/audio without sending our own streams.
+    // Video: receive only (field unit's camera)
     pc.addTransceiver("video", { direction: "recvonly" });
-    pc.addTransceiver("audio", { direction: "recvonly" });
+    // Audio: sendrecv — commander can speak back to the field unit
+    pc.addTransceiver("audio", { direction: "sendrecv" });
 
-    const newFeed: LiveFeed = { ...meta, pc, muted: false };
+    // Get commander's mic (reuse stream if already acquired)
+    if (!commanderMicRef.current) {
+      navigator.mediaDevices.getUserMedia({ audio: true, video: false })
+        .then(stream => {
+          commanderMicRef.current = stream;
+          // Add mic track to all active peer connections
+          liveWsRefs.current.forEach((_, roomId) => {
+            const feed = liveFeeds.find(f => f.room_id === roomId);
+            if (feed?.pc) {
+              stream.getAudioTracks().forEach(track => {
+                try { feed.pc!.addTrack(track, stream); } catch (_) {}
+              });
+            }
+          });
+        })
+        .catch(() => {}); // mic permission denied — continue without speaking
+    }
+    // Add mic tracks to this new connection if mic already acquired
+    if (commanderMicRef.current) {
+      commanderMicRef.current.getAudioTracks().forEach(track => {
+        try { pc.addTrack(track, commanderMicRef.current!); } catch (_) {}
+      });
+    }
+
+    const newFeed: LiveFeed = { ...meta, pc, muted: false, micMuted: false };
 
     pc.ontrack = (e) => {
       // eslint-disable-next-line no-console
@@ -4648,13 +4690,30 @@ export default function DODMap() {
     liveWsRefs.current.delete(roomId);
     setLiveFeeds(prev => {
       const next = prev.filter(f => f.room_id !== roomId);
-      if (next.length === 0) setShowLiveGrid(false);
+      if (next.length === 0) {
+        setShowLiveGrid(false);
+        // Stop mic when no feeds remain
+        commanderMicRef.current?.getTracks().forEach(t => t.stop());
+        commanderMicRef.current = null;
+      }
       return next;
     });
   }, []);
 
   const handleMuteFeed = useCallback((roomId: string) => {
     setLiveFeeds(prev => prev.map(f => f.room_id === roomId ? { ...f, muted: !f.muted } : f));
+  }, []);
+
+  const handleToggleMic = useCallback((roomId: string) => {
+    setLiveFeeds(prev => prev.map(f => {
+      if (f.room_id !== roomId) return f;
+      const newMicMuted = !f.micMuted;
+      // Mute/unmute the mic track on this specific peer connection
+      if (commanderMicRef.current) {
+        commanderMicRef.current.getAudioTracks().forEach(t => { t.enabled = !newMicMuted; });
+      }
+      return { ...f, micMuted: newMicMuted };
+    }));
   }, []);
 
   const handleInviteFeed = useCallback((roomId: string) => {
@@ -5621,61 +5680,54 @@ export default function DODMap() {
         />
       )}
 
-      {/* Live feed alert toast — shown immediately when soldier goes live */}
-      {pendingLiveAlert && !showLiveGrid && (
-        <LiveFeedAlertToast
-          alert={pendingLiveAlert}
-          saveSession={saveSession}
-          onSaveToggle={() => setSaveSession(v => !v)}
-          onView={async () => {
-            const token = localStorage.getItem("access_token");
-            const alertSnapshot = pendingLiveAlert; // capture before clearing
-            const willSave = saveSession;            // capture current toggle state
-
-            setPendingLiveAlert(null);              // dismiss toast immediately
-            if (token) _joinLiveFeed(alertSnapshot, token);
-            setShowLiveGrid(true);
-            setLiveFeedMinimized(false);
-
-            // Create session record in backend
-            try {
-              const res = await api.startLiveSession({
-                room_id: alertSnapshot.room_id,
-                initiator_name: alertSnapshot.user_name,
-                team_name: alertSnapshot.team_name,
-                lat: alertSnapshot.lat,
-                lng: alertSnapshot.lng,
-                saved: willSave,
-              });
-              const sid = (res.data as { id?: string })?.id ?? null;
-              setActiveSessionId(sid);
-              // eslint-disable-next-line no-console
-              console.log("[DRD Session] Started, id:", sid, "saved:", willSave);
-            } catch (err) {
-              // eslint-disable-next-line no-console
-              console.warn("[DRD Session] startLiveSession failed:", err);
-            }
-          }}
-          onIgnore={() => {
-            // Send rejection back through the video signaling room
-            const ws = liveWsRefs.current.get(pendingLiveAlert.room_id);
-            if (ws && ws.readyState === WebSocket.OPEN) {
-              ws.send(JSON.stringify({ type: "ignored", room_id: pendingLiveAlert.room_id, from: "commander" }));
-            } else {
-              // Connect briefly just to send rejection
+      {/* Live feed alert toasts — stacked queue, one per incoming soldier */}
+      <div className="fixed bottom-6 left-6 z-[7000] flex flex-col gap-2">
+        {pendingLiveAlerts.map(alert => (
+          <LiveFeedAlertToast
+            key={alert.room_id}
+            alert={alert}
+            saveSession={saveSession}
+            onSaveToggle={() => setSaveSession(v => !v)}
+            onView={async () => {
               const token = localStorage.getItem("access_token");
-              if (token) {
-                const rejectWs = new WebSocket(`${BASE_WS}/ws/video/${pendingLiveAlert.room_id}?token=${token}`);
-                rejectWs.onopen = () => {
-                  rejectWs.send(JSON.stringify({ type: "ignored", room_id: pendingLiveAlert.room_id, from: "commander", user_name: pendingLiveAlert.user_name }));
-                  setTimeout(() => rejectWs.close(), 1000);
-                };
+              const alertSnapshot = alert;
+              const willSave = saveSession;
+              setPendingLiveAlerts(prev => prev.filter(a => a.room_id !== alert.room_id));
+              if (token) _joinLiveFeed(alertSnapshot, token);
+              setShowLiveGrid(true);
+              setLiveFeedMinimized(false);
+              try {
+                const res = await api.startLiveSession({
+                  room_id: alertSnapshot.room_id,
+                  initiator_name: alertSnapshot.user_name,
+                  team_name: alertSnapshot.team_name,
+                  lat: alertSnapshot.lat,
+                  lng: alertSnapshot.lng,
+                  saved: willSave,
+                });
+                const sid = (res.data as { id?: string })?.id ?? null;
+                setActiveSessionId(sid);
+              } catch (_) {}
+            }}
+            onIgnore={() => {
+              const ws = liveWsRefs.current.get(alert.room_id);
+              if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "ignored", room_id: alert.room_id, from: "commander" }));
+              } else {
+                const token = localStorage.getItem("access_token");
+                if (token) {
+                  const rejectWs = new WebSocket(`${BASE_WS}/ws/video/${alert.room_id}?token=${token}`);
+                  rejectWs.onopen = () => {
+                    rejectWs.send(JSON.stringify({ type: "ignored", room_id: alert.room_id, from: "commander", user_name: alert.user_name }));
+                    setTimeout(() => rejectWs.close(), 1000);
+                  };
+                }
               }
-            }
-            setPendingLiveAlert(null);
-          }}
-        />
-      )}
+              setPendingLiveAlerts(prev => prev.filter(a => a.room_id !== alert.room_id));
+            }}
+          />
+        ))}
+      </div>
 
       {/* Live feed grid */}
       {showLiveGrid && liveFeeds.length > 0 && (
@@ -5685,6 +5737,7 @@ export default function DODMap() {
           minimized={liveFeedMinimized}
           onSetActive={setActiveFeedIndex}
           onMute={handleMuteFeed}
+          onToggleMic={handleToggleMic}
           onMinimize={() => setLiveFeedMinimized(v => !v)}
           onInvite={handleInviteFeed}
           onClose={async (roomId) => {
