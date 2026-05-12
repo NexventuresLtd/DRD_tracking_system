@@ -243,6 +243,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   LatLng? _navDestination;
   Map<String, dynamic>? _activeFollowSession;
   List<LatLng> _activeRouteRoad = [];
+  List<LatLng> _previewRoad = []; // OSRM road preview before follow starts
+  // OSRM roads per route id: routeId → road polyline starting from soldier's position
+  final Map<String, List<LatLng>> _routeRoads = {};
+  LatLng? _lastRoadFetchPos; // track position to know when to re-fetch
   // Checkpoint tracking
   int _currentWaypointIndex = 0;
   bool _routePaused = false;
@@ -1392,8 +1396,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             urlTemplate: tile['overlay'] as String,
             userAgentPackageName: 'com.drd.fieldops',
           ),
-        // Approach line: dashed from current position to first waypoint
-        PolylineLayer(polylines: _buildApproachLines(myPos)),
+        // Approach preview: only shown when no OSRM road is active yet
+        if (_activeRouteRoad.isEmpty)
+          PolylineLayer(polylines: _buildApproachLines(myPos)),
         // Route polylines
         PolylineLayer(polylines: _buildRouteLines()),
         // Active route: OSRM road polyline when available, otherwise straight line
@@ -1954,8 +1959,21 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return polylines;
   }
 
-  /// Dashed amber line from current GPS position to the first waypoint of each route.
+  /// Approach from current GPS position to the selected route.
+  /// Uses the OSRM-fetched road preview when available, straight dashed line while loading.
   List<Polyline> _buildApproachLines(LatLng myPos) {
+    // If we have the OSRM preview road, use it (actual road, not straight line)
+    if (_previewRoad.length >= 2) {
+      return [
+        Polyline(
+          points: _previewRoad,
+          color: Colors.amberAccent.withValues(alpha: 0.85),
+          strokeWidth: 2.5,
+          isDotted: true,
+        ),
+      ];
+    }
+    // Fallback: straight dashed line while OSRM is loading
     final lines = <Polyline>[];
     for (final route in _myRoutes) {
       final wps = route['waypoints'] as List?;
@@ -1964,14 +1982,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       final lat = (first['latitude'] as num?)?.toDouble();
       final lng = (first['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) continue;
-      final firstWp = LatLng(lat, lng);
-      // Skip if already at the first waypoint (within ~20 m)
       final dist = _distanceKm(myPos.latitude, myPos.longitude, lat, lng);
       if (dist != null && dist < 0.02) continue;
       lines.add(Polyline(
-        points: [myPos, firstWp],
-        color: Colors.amberAccent.withValues(alpha: 0.8),
-        strokeWidth: 2.5,
+        points: [myPos, LatLng(lat, lng)],
+        color: Colors.amberAccent.withValues(alpha: 0.5),
+        strokeWidth: 2,
         isDotted: true,
       ));
     }
@@ -2158,8 +2174,14 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       return;
     }
 
-    // Fetch real road route from OSRM (runs in parallel, non-blocking)
-    final roadPoints = await _fetchOsrmRoute(waypoints);
+    // Build waypoints list starting from soldier's current GPS position
+    // so OSRM routes from here → first waypoint → … → destination
+    final waypointsWithStart = [
+      if (loc.hasRealFix)
+        {'latitude': loc.latitude, 'longitude': loc.longitude},
+      ...waypoints,
+    ];
+    final roadPoints = await _fetchOsrmRoute(waypointsWithStart);
 
     final target = _routeTarget(route);
     if (!mounted) return;
@@ -2168,6 +2190,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _navDestination = target;
       _activeFollowSession = session as Map<String, dynamic>?;
       _activeRouteRoad = roadPoints;
+      _previewRoad = []; // OSRM road takes over
       _panelOpen = false;
       // Reset checkpoint tracking
       _currentWaypointIndex = 0;
@@ -2192,6 +2215,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         _activeFollowSession = null;
         _activeNavRoute = null;
         _navDestination = null;
+        _previewRoad = [];
+        _activeRouteRoad = [];
         _activeRouteRoad = [];
         _currentWaypointIndex = 0;
         _routePaused = false;
@@ -2210,6 +2235,18 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
     final target = _routeTarget(route);
     final routeName = route['name'] as String? ?? 'Route';
+
+    // Fetch OSRM preview from current position → first waypoint → … → destination
+    final loc = context.read<LocationProvider>();
+    if (loc.hasRealFix && waypoints.isNotEmpty) {
+      final waypointsWithStart = [
+        {'latitude': loc.latitude, 'longitude': loc.longitude},
+        ...waypoints,
+      ];
+      _fetchOsrmRoute(waypointsWithStart).then((road) {
+        if (mounted) setState(() => _previewRoad = road);
+      });
+    }
     final routeStatus =
         (route['route_status'] as String? ??
                 (route['is_active'] == false ? 'completed' : 'assigned'))

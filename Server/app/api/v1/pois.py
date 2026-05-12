@@ -311,20 +311,25 @@ async def delete_poi(
     current_user: User = Depends(require_commander),
     db: AsyncSession = Depends(get_db)
 ):
-    """Delete POI"""
+    """Permanently delete a POI and its visibility records"""
     result = await db.execute(select(POI).where(POI.id == poi_id))
     poi = result.scalar_one_or_none()
-    
+
     if not poi:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="POI not found"
         )
-    
-    poi.status = "inactive"
+
+    # Delete child visibility records first to avoid FK constraint errors
+    vis_result = await db.execute(select(POIVisibility).where(POIVisibility.poi_id == poi_id))
+    for vis in vis_result.scalars().all():
+        await db.delete(vis)
+
+    await db.delete(poi)
     await db.commit()
-    
-    return {"message": "POI deactivated successfully"}
+
+    return {"message": "POI deleted successfully"}
 
 @router.put("/{poi_id}/visibility")
 async def update_poi_visibility(

@@ -3732,7 +3732,17 @@ export default function DODMap() {
   const [msgModal, setMsgModal] = useState<string | null>(null);
   const [sosIncident, setSosIncident] = useState<SOSIncident | null>(null);
   const [routes, setRoutes] = useState<Route[]>([]);
+  const [activeFollowSessions, setActiveFollowSessions] = useState<Array<{
+    id: string; route_id: string; user_id: string;
+    route_name_snapshot: string; route_color_snapshot: string;
+    waypoints_snapshot: Array<{ latitude: number; longitude: number }>;
+    start_latitude?: number; start_longitude?: number;
+    last_latitude?: number; last_longitude?: number;
+    progress_percent?: number; current_waypoint_index?: number;
+  }>>([]);
   const [routeHistory, setRouteHistory] = useState<RouteHistoryItem[]>([]);
+  // OSRM road routes per follow session id → LatLng pairs
+  const [sessionRoads, setSessionRoads] = useState<Map<string, [number, number][]>>(new Map());
   const [routeDrawMode, setRouteDrawMode] = useState(false);
   const [zoneMode, setZoneMode] = useState(false);
   const [pendingRoute, setPendingRoute] = useState<Waypoint[]>([]);
@@ -3819,11 +3829,23 @@ export default function DODMap() {
 
   const refreshRoutesAndPois = useCallback(async () => {
     try {
-      const [routesRes, historyRes, poisRes] = await Promise.all([
+      const [routesRes, historyRes, poisRes, followRes] = await Promise.all([
         api.listRoutes({ is_active: true }),
         api.listRouteHistory(),
         api.listPOIs(),
+        api.listRouteFollowSessions({ status: "active" }),
       ]);
+      // Update active follow sessions for per-soldier progress lines
+      if (followRes?.data) {
+        setActiveFollowSessions((followRes.data as Array<{
+          id: string; route_id: string; user_id: string;
+          route_name_snapshot: string; route_color_snapshot: string;
+          waypoints_snapshot: Array<{ latitude: number; longitude: number }>;
+          start_latitude?: number; start_longitude?: number;
+          last_latitude?: number; last_longitude?: number;
+          progress_percent?: number; current_waypoint_index?: number;
+        }>));
+      }
 
       const refreshedRoutes: Route[] = ((routesRes.data ?? []) as Array<{
         is_active: any;
@@ -3919,7 +3941,7 @@ export default function DODMap() {
     }
 
     try {
-      const [meRes, teamsRes, locsRes, poisRes, routesRes, historyRes, msgsRes, eventsRes, allUsersRes] = await Promise.allSettled([
+      const [meRes, teamsRes, locsRes, poisRes, routesRes, historyRes, msgsRes, eventsRes, allUsersRes, followRes] = await Promise.allSettled([
         api.getMe(),
         api.listTeams(),
         api.getActiveLocations(),
@@ -3929,6 +3951,7 @@ export default function DODMap() {
         api.listMessages({ size: 50 }),
         api.listEvents({ size: 50 }),
         api.listUsers({ size: 500 }),
+        api.listRouteFollowSessions({ status: "active" }),
       ]);
 
       if (meRes.status === "fulfilled") {
@@ -4109,6 +4132,11 @@ export default function DODMap() {
           isActive: r.is_active,
         }));
         setRoutes(frontendRoutes);
+      }
+
+      // Active route-follow sessions — per-soldier progress tracking
+      if (followRes.status === "fulfilled" && followRes.value?.data) {
+        setActiveFollowSessions(followRes.value.data as typeof activeFollowSessions);
       }
 
       if (historyRes.status === "fulfilled") {
@@ -4492,6 +4520,36 @@ export default function DODMap() {
     return () => unsubVideo();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isConnected]);
+
+  // Fetch OSRM road routes for each active follow session
+  useEffect(() => {
+    if (activeFollowSessions.length === 0) return;
+    const BASE_OSRM = "https://router.project-osrm.org/route/v1/driving";
+    activeFollowSessions.forEach(session => {
+      // Skip if no soldier position or already fetched
+      if (!session.last_latitude || sessionRoads.has(session.id)) return;
+      const wps = session.waypoints_snapshot ?? [];
+      if (wps.length < 1) return;
+      // Route: soldier start → … → waypoints
+      const allPoints = [
+        ...(session.start_latitude ? [{ latitude: session.start_latitude, longitude: session.start_longitude }] : []),
+        ...wps,
+      ];
+      if (allPoints.length < 2) return;
+      const coords = allPoints.map(p => `${p.longitude},${p.latitude}`).join(";");
+      fetch(`${BASE_OSRM}/${coords}?overview=full&geometries=geojson`)
+        .then(r => r.json())
+        .then((data: { routes?: Array<{ geometry: { coordinates: number[][] } }> }) => {
+          const road = data.routes?.[0]?.geometry?.coordinates;
+          if (road) {
+            const latLngs = road.map(c => [c[1], c[0]] as [number, number]);
+            setSessionRoads(prev => new Map(prev).set(session.id, latLngs));
+          }
+        })
+        .catch(() => {});
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFollowSessions]);
 
   const _joinLiveFeed = useCallback((meta: { room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number }, token: string) => {
     if (liveWsRefs.current.has(meta.room_id)) return; // already joined
@@ -5075,6 +5133,64 @@ export default function DODMap() {
               {routes.map(route => (
                 <RoutePath key={route.id} route={route} />
               ))}
+
+              {/* Per-soldier route-follow progress lines */}
+              {activeFollowSessions
+                .filter(s => s.last_latitude != null && s.last_longitude != null)
+                .map(session => {
+                  const soldier = users.find(u => u.user_id === session.user_id);
+                  // Don't render if soldier has no known position on the map
+                  if (!soldier || (soldier.lat === 0 && soldier.lng === 0)) return null;
+                  const soldierColor = TEAM_COLORS[soldier.group as Team]?.primary ?? session.route_color_snapshot ?? "#22c55e";
+                  const road = sessionRoads.get(session.id);
+                  const wps = session.waypoints_snapshot ?? [];
+                  const progressIndex = Math.min(session.current_waypoint_index ?? 0, wps.length);
+                  const currentPos: [number, number] = [session.last_latitude!, session.last_longitude!];
+
+                  // Split road at soldier's current progress if OSRM road is available
+                  let traveledRoad: [number, number][] = [];
+                  let remainingRoad: [number, number][] = [];
+                  if (road && road.length >= 2) {
+                    // Approximate split: find closest point on road to current position
+                    let closestIdx = 0;
+                    let minDist = Infinity;
+                    road.forEach(([lat, lng], i) => {
+                      const d = Math.hypot(lat - currentPos[0], lng - currentPos[1]);
+                      if (d < minDist) { minDist = d; closestIdx = i; }
+                    });
+                    traveledRoad = [...road.slice(0, closestIdx + 1), currentPos];
+                    remainingRoad = [currentPos, ...road.slice(closestIdx + 1)];
+                  } else {
+                    // Fallback straight lines while OSRM loads
+                    const startPos: [number, number] | null = session.start_latitude ? [session.start_latitude, session.start_longitude!] : null;
+                    if (startPos) traveledRoad = [startPos, currentPos];
+                    const remainingWps = wps.slice(progressIndex).map(wp => [wp.latitude, wp.longitude] as [number, number]);
+                    remainingRoad = [currentPos, ...remainingWps];
+                  }
+
+                  return (
+                    <React.Fragment key={`follow-${session.id}`}>
+                      {traveledRoad.length >= 2 && (
+                        <Polyline positions={traveledRoad} pathOptions={{ color: soldierColor, weight: 4, opacity: 0.9 }} />
+                      )}
+                      {remainingRoad.length >= 2 && (
+                        <Polyline positions={remainingRoad} pathOptions={{ color: soldierColor, weight: 2.5, opacity: 0.4, dashArray: "6 8" }} />
+                      )}
+                      <CircleMarker
+                        center={currentPos}
+                        radius={7}
+                        pathOptions={{ color: soldierColor, fillColor: soldierColor, fillOpacity: 1, weight: 2 }}
+                      >
+                        <Tooltip direction="top" permanent={false} opacity={0.95}>
+                          <div style={{ fontFamily: "'Poppins', sans-serif", fontSize: 10 }}>
+                            <div style={{ fontWeight: 700, color: soldierColor }}>{soldier.name}</div>
+                            <div style={{ color: "#94a3b8" }}>{session.route_name_snapshot} · {Math.round(session.progress_percent ?? 0)}%</div>
+                          </div>
+                        </Tooltip>
+                      </CircleMarker>
+                    </React.Fragment>
+                  );
+                })}
 
               {/* Zone polygons — points sorted to prevent crossing lines */}
               {routes.filter(r => r.isZone).map(zone => {
