@@ -15,26 +15,9 @@ class EnvironmentConfig {
 
     buildFlavor = flavor;
 
-    switch (flavor) {
-      case BuildFlavor.development:
-        // For local development - configure based on your network
-        // UPDATE THIS with your actual local IP or localhost
-        apiBaseUrl = 'https://staging.drd.nexventures.net/api/v1';
-        wsUrl = 'wss://staging.drd.nexventures.net/ws';
-        break;
-
-      case BuildFlavor.staging:
-        // For staging/testing environment
-        apiBaseUrl = 'https://staging.drd.nexventures.net/api/v1';
-        wsUrl = 'wss://staging.drd.nexventures.net/ws';
-        break;
-
-      case BuildFlavor.production:
-        // For production deployment
-        apiBaseUrl = 'https://drd.nexventures.net/api/v1';
-        wsUrl = 'wss://drd.nexventures.net/ws';
-        break;
-    }
+    // All flavors always use the production server
+    apiBaseUrl = 'https://drd.nexventures.net/api/v1';
+    wsUrl = 'wss://drd.nexventures.net/ws';
 
     debugPrint('🔧 Environment initialized: ${flavor.name.toUpperCase()}');
     debugPrint('📡 API URL: $apiBaseUrl');
