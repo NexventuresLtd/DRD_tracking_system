@@ -16,15 +16,38 @@ class FieldOperations extends StatefulWidget {
 
 class _FieldOperationsState extends State<FieldOperations> {
   final ApiService _apiService = ApiService();
+  final MapController _mapController = MapController();
   List<Map<String, dynamic>> _missions = [];
   List<Map<String, dynamic>> _zones = [];
   bool _isLoading = true;
+  bool _mapReady = false;
+  bool _centeredOnUser = false;
   final String _filterStatus = 'all';
+  LocationProvider? _locProvider;
 
   @override
   void initState() {
     super.initState();
     _loadOperations();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _locProvider = context.read<LocationProvider>();
+      _locProvider!.addListener(_autoCenter);
+    });
+  }
+
+  void _autoCenter() {
+    if (!mounted || _centeredOnUser) return;
+    final loc = _locProvider;
+    if (loc != null && loc.hasRealFix && _mapReady) {
+      _centeredOnUser = true;
+      _mapController.move(LatLng(loc.latitude, loc.longitude), 13.0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _locProvider?.removeListener(_autoCenter);
+    super.dispose();
   }
 
   Future<void> _loadOperations() async {
@@ -339,6 +362,7 @@ class _FieldOperationsState extends State<FieldOperations> {
 
   Widget _buildOperationsMap() {
     return FlutterMap(
+      mapController: _mapController,
       options: MapOptions(
         initialCenter: (() {
           final loc = context.read<LocationProvider>();
@@ -347,6 +371,7 @@ class _FieldOperationsState extends State<FieldOperations> {
               : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
         })(),
         initialZoom: 13,
+        onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
       ),
       children: [
         TileLayer(

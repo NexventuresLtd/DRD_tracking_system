@@ -30,8 +30,11 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
   WebSocketChannel? _locWs;
   Timer? _refreshTimer;
   bool _loading = true;
+  bool _mapReady = false;
+  bool _centeredOnUser = false;
   Map<String, dynamic>? _selected;
   LatLng? _initialCenter;
+  LocationProvider? _locProvider;
 
   @override
   void initState() {
@@ -39,8 +42,19 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadTeamData();
       _connectWS();
+      _locProvider = context.read<LocationProvider>();
+      _locProvider!.addListener(_autoCenter);
     });
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) => _loadTeamData());
+  }
+
+  void _autoCenter() {
+    if (!mounted || _centeredOnUser) return;
+    final loc = _locProvider;
+    if (loc != null && loc.hasRealFix && _mapReady && _initialCenter == null) {
+      _centeredOnUser = true;
+      _mapCtrl.move(LatLng(loc.latitude, loc.longitude), 13.0);
+    }
   }
 
   Future<void> _loadTeamData() async {
@@ -256,6 +270,7 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
 
   @override
   void dispose() {
+    _locProvider?.removeListener(_autoCenter);
     _locWs?.sink.close();
     _refreshTimer?.cancel();
     super.dispose();
@@ -293,7 +308,7 @@ class _FieldTeamTrackingState extends State<FieldTeamTracking> {
                           : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
                     })(),
                     initialZoom: 13,
-                    onMapReady: () {},
+                    onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
                   ),
                   children: [
                     TileLayer(

@@ -2293,6 +2293,7 @@ function RolesGuideModal({ onClose }: { onClose: () => void }) {
 function ForceManagementPanel({
   expanded, onToggle, allUsers, dbTeams, isLoading,
   onCreateUser, onCreateTeam, onAssignTeam, onRemoveFromTeam, onLocate,
+  currentRole, onResetData,
 }: {
   expanded: boolean; onToggle: () => void;
   allUsers: UserRecord[]; dbTeams: TeamInfo[]; isLoading: boolean;
@@ -2300,9 +2301,14 @@ function ForceManagementPanel({
   onAssignTeam: (userId: string) => void;
   onRemoveFromTeam: (userId: string, teamId: string) => void;
   onLocate: (userId: string) => void;
+  currentRole?: string | null;
+  onResetData: () => void;
 }) {
   const [search, setSearch] = useState("");
   const [showRolesGuide, setShowRolesGuide] = useState(false);
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const isAdmin = currentRole === "admin" || currentRole === "super_admin";
 
   const fieldUnits = allUsers.filter(u => {
     const q = search.toLowerCase();
@@ -2350,6 +2356,66 @@ function ForceManagementPanel({
               ?
             </button>
           </div>
+
+          {/* Admin-only reset button */}
+          {isAdmin && (
+            <button
+              onClick={() => setShowResetConfirm(true)}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-[10px] font-semibold cursor-pointer transition-all hover:opacity-80"
+              style={{ backgroundColor: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.35)", color: "#ef4444" }}
+            >
+              <FiAlertCircle size={11} /> RESET ALL DATA
+            </button>
+          )}
+
+          {/* Reset confirmation dialog */}
+          {showResetConfirm && (
+            <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60" onClick={() => setShowResetConfirm(false)}>
+              <div
+                className="rounded-xl p-5 max-w-xs w-full mx-4"
+                style={{ backgroundColor: "#0f172a", border: "1px solid rgba(239,68,68,0.4)" }}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="flex items-center gap-2 mb-3">
+                  <FiAlertCircle size={18} color="#ef4444" />
+                  <span className="text-white font-bold text-sm tracking-wide">RESET ALL DATA</span>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed mb-4">
+                  This will permanently delete all <span className="text-white font-semibold">routes, teams, locations, messages, events, POIs, zones</span> and all other operational data.
+                  <br /><br />
+                  <span className="text-green-400 font-semibold">User accounts will be preserved.</span>
+                  <br /><br />
+                  This action <span className="text-red-400 font-semibold">cannot be undone</span>.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setShowResetConfirm(false)}
+                    className="flex-1 py-2 rounded text-[11px] font-semibold text-slate-400 hover:text-white transition-colors"
+                    style={{ backgroundColor: "rgba(148,163,184,0.1)", border: "1px solid rgba(148,163,184,0.2)" }}
+                  >
+                    CANCEL
+                  </button>
+                  <button
+                    disabled={resetting}
+                    onClick={async () => {
+                      setResetting(true);
+                      try {
+                        await api.resetAllData();
+                        setShowResetConfirm(false);
+                        onResetData();
+                      } finally {
+                        setResetting(false);
+                      }
+                    }}
+                    className="flex-1 py-2 rounded text-[11px] font-semibold transition-all hover:opacity-80 disabled:opacity-50"
+                    style={{ backgroundColor: "rgba(239,68,68,0.85)", color: "white" }}
+                  >
+                    {resetting ? "RESETTING..." : "YES, RESET"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {unassigned.length > 0 && (
             <div className="rounded-md px-2 py-2" style={{ backgroundColor: "rgba(34,197,94,0.08)", border: "1px solid rgba(34,197,94,0.18)" }}>
@@ -5007,7 +5073,16 @@ export default function DODMap() {
               onAssignTeam={(uid) => setAssigningUserId(uid)}
               onRemoveFromTeam={handleRemoveFromTeam}
               onLocate={handleLocateUser}
-            // currentRole={currentUserRole}
+              currentRole={currentUserRole}
+              onResetData={() => {
+                setUsers([]);
+                setRoutes([]);
+                setPois([]);
+                setMessages([]);
+                setEvents([]);
+                setDbTeams([]);
+                loadData();
+              }}
             />
 
             {/* Past Live Sessions */}

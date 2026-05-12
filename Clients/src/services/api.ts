@@ -138,4 +138,7 @@ export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/$
 export const getMessageEvidence = (messageId: string) => api.get(`/api/v1/evidence/message/${messageId}`);
 export const deleteEvidence = (id: string) => api.delete(`/api/v1/evidence/${id}`);
 
+// ── Admin ─────────────────────────────────────────────────────────────────────
+export const resetAllData = () => api.post('/api/v1/admin/reset-data');
+
 export default api;

@@ -76,6 +76,8 @@ class _LiveTrackingState extends State<LiveTracking>
   WebSocketChannel? _evtWs;
   WebSocketChannel? _liveAlertWs;
   Map<String, dynamic>? _pendingLiveAlert;
+  bool _centeredOnUser = false;
+  LocationProvider? _locProvider;
   late AnimationController _pulseCtrl;
   final TextEditingController _msgCtrl = TextEditingController();
 
@@ -90,6 +92,8 @@ class _LiveTrackingState extends State<LiveTracking>
       _loadData();
       _connectWS();
       _connectLiveAlertWS();
+      _locProvider = context.read<LocationProvider>();
+      _locProvider!.addListener(_autoCenter);
     });
     _refreshTimer = Timer.periodic(
       const Duration(seconds: 5),
@@ -243,6 +247,17 @@ class _LiveTrackingState extends State<LiveTracking>
   int get _offline =>
       _allLocations.where((l) => l['status'] == 'offline').length;
 
+  void _autoCenter() {
+    if (!mounted || _centeredOnUser) return;
+    final loc = _locProvider;
+    if (loc != null && loc.hasRealFix && _mapReady) {
+      _centeredOnUser = true;
+      if (_initialCenter == null) {
+        _mapCtrl.move(LatLng(loc.latitude, loc.longitude), AppConstants.defaultZoom);
+      }
+    }
+  }
+
   void _connectLiveAlertWS() async {
     final token = await _storage.getToken();
     if (token == null) return;
@@ -286,6 +301,7 @@ class _LiveTrackingState extends State<LiveTracking>
 
   @override
   void dispose() {
+    _locProvider?.removeListener(_autoCenter);
     _pulseCtrl.dispose();
     _refreshTimer?.cancel();
     _locWs?.sink.close();
@@ -462,7 +478,7 @@ class _LiveTrackingState extends State<LiveTracking>
               : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
         })(),
         initialZoom: AppConstants.defaultZoom,
-        onMapReady: () => setState(() => _mapReady = true),
+        onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
         onTap: (_, _) => setState(() => _selected = null),
       ),
       children: [

@@ -24,14 +24,29 @@ class _ViewerHomeState extends State<ViewerHome> {
   List<Map<String, dynamic>> _routes = [];
   List<Map<String, dynamic>> _events = [];
   bool _isLoading = true;
+  bool _mapReady = false;
+  bool _centeredOnUser = false;
   final MapController _mapController = MapController();
+  LocationProvider? _locProvider;
 
   @override
   void initState() {
     super.initState();
     _loadViewerData();
-    // Auto-refresh for viewer
     Future.delayed(const Duration(seconds: 15), _autoRefresh);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _locProvider = context.read<LocationProvider>();
+      _locProvider!.addListener(_autoCenter);
+    });
+  }
+
+  void _autoCenter() {
+    if (!mounted || _centeredOnUser) return;
+    final loc = _locProvider;
+    if (loc != null && loc.hasRealFix && _mapReady) {
+      _centeredOnUser = true;
+      _mapController.move(LatLng(loc.latitude, loc.longitude), 13.0);
+    }
   }
 
   Future<void> _loadViewerData() async {
@@ -350,6 +365,7 @@ class _ViewerHomeState extends State<ViewerHome> {
                   : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
             })(),
             initialZoom: 13,
+            onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
           ),
           children: [
             TileLayer(
@@ -889,6 +905,7 @@ class _ViewerHomeState extends State<ViewerHome> {
 
   @override
   void dispose() {
+    _locProvider?.removeListener(_autoCenter);
     super.dispose();
   }
 }

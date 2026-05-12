@@ -26,8 +26,10 @@ class _RoutePlanningState extends State<RoutePlanning> {
   bool _drawMode = false;
   bool _mapReady = false;
   bool _loading = true;
+  bool _centeredOnUser = false;
   String _mapTile = 'tactical';
   int _viewTab = 0; // 0=Map 1=Routes
+  LocationProvider? _locProvider;
 
   final Map<String, String> _tileUrls = {
     'tactical': 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
@@ -38,7 +40,21 @@ class _RoutePlanningState extends State<RoutePlanning> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadData());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadData();
+      _locProvider = context.read<LocationProvider>();
+      _locProvider!.addListener(_autoCenter);
+      _autoCenter();
+    });
+  }
+
+  void _autoCenter() {
+    if (!mounted || _centeredOnUser) return;
+    final loc = _locProvider;
+    if (loc != null && loc.hasRealFix && _mapReady) {
+      _centeredOnUser = true;
+      _mapCtrl.move(LatLng(loc.latitude, loc.longitude), AppConstants.defaultZoom);
+    }
   }
 
   Future<void> _loadData() async {
@@ -60,6 +76,12 @@ class _RoutePlanningState extends State<RoutePlanning> {
   }
 
   // ── Build ────────────────────────────────────────────────────────────────────
+
+  @override
+  void dispose() {
+    _locProvider?.removeListener(_autoCenter);
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -151,7 +173,7 @@ class _RoutePlanningState extends State<RoutePlanning> {
                 : LatLng(AppConstants.defaultLat, AppConstants.defaultLng);
           })(),
           initialZoom: AppConstants.defaultZoom,
-          onMapReady: () => setState(() => _mapReady = true),
+          onMapReady: () { setState(() => _mapReady = true); _autoCenter(); },
           onTap: (_, point) {
             if (_drawMode) setState(() => _pendingWaypoints.add(point));
           },
