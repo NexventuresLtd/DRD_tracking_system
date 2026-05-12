@@ -296,7 +296,8 @@ class _OperatorHomeState extends State<OperatorHome> {
                   children: [
                     TileLayer(
                       urlTemplate:
-                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                          'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                      subdomains: const ['a', 'b', 'c', 'd'],
                       userAgentPackageName: 'com.drd.fieldops',
                     ),
                     MarkerLayer(
@@ -1313,7 +1314,8 @@ class _OperatorHomeState extends State<OperatorHome> {
             ),
             children: [
               TileLayer(
-                urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                subdomains: const ['a', 'b', 'c', 'd'],
                 userAgentPackageName: 'com.drd.fieldops',
               ),
               MarkerLayer(

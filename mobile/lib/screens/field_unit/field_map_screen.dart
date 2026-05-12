@@ -380,9 +380,9 @@ class _FieldMapScreenState extends State<FieldMapScreen>
                     _showCreatePoiSheet(latLng),
               ),
               children: [
-                // OSM base tiles
                 TileLayer(
-                  urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  urlTemplate: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png',
+                  subdomains: const ['a', 'b', 'c', 'd'],
                   userAgentPackageName: 'com.drd.fieldops',
                 ),
 

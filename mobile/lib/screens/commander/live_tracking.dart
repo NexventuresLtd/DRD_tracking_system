@@ -594,7 +594,7 @@ class _LiveTrackingState extends State<LiveTracking>
           if (lat == null || lng == null) return null;
           final status = l['status'] as String? ?? 'offline';
           final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
-          final name = l['user_name'] as String? ?? '?';
+          final name = (l['name'] ?? l['user_name']) as String? ?? '?';
           final initials = name
               .split(' ')
               .where((w) => w.isNotEmpty)
@@ -902,7 +902,7 @@ class _LiveTrackingState extends State<LiveTracking>
     final l = _selected!;
     final status = l['status'] as String? ?? 'offline';
     final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
-    final name = l['user_name'] as String? ?? 'Unknown';
+    final name = (l['name'] ?? l['user_name']) as String? ?? 'Unknown';
     final team = l['team_name'] as String?;
     final flag = l['flag'] as String?;
 
@@ -1121,7 +1121,7 @@ class _LiveTrackingState extends State<LiveTracking>
       );
 
   void _showMessageDialog(Map<String, dynamic> unit) {
-    final name = unit['user_name'] as String? ?? 'Unit';
+    final name = (unit['name'] ?? unit['user_name']) as String? ?? 'Unit';
     showDialog(
       context: context,
       builder: (_) => AlertDialog(
@@ -1175,7 +1175,7 @@ class _LiveTrackingState extends State<LiveTracking>
   }
 
   void _sendAlert(Map<String, dynamic> unit) async {
-    final name = unit['user_name'] as String? ?? 'Unit';
+    final name = (unit['name'] ?? unit['user_name']) as String? ?? 'Unit';
     await _api.post('/messages', {
       'to_user_id': unit['user_id'],
       'to_all': false,
@@ -1400,7 +1400,7 @@ class _LiveTrackingState extends State<LiveTracking>
                 Text(
                   nearest == null
                       ? 'Nearest teammate: unavailable'
-                      : 'Nearest teammate: ${nearest['user_name'] ?? 'Unknown'} · ${_formatDistance(nearest['distance_km'] as double?)}',
+                      : 'Nearest teammate: ${nearest['name'] ?? nearest['user_name'] ?? 'Unknown'} · ${_formatDistance(nearest['distance_km'] as double?)}',
                   style: const TextStyle(color: Colors.white70, fontSize: 10),
                 ),
               ],

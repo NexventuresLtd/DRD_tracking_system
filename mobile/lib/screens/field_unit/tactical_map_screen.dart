@@ -228,7 +228,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   final StorageService _storage = StorageService();
 
   // ── State ───────────────────────────────────────────────────────────────────
-  TacMapType _mapType = TacMapType.standard;
+  TacMapType _mapType = TacMapType.tactical;
   List<Map<String, dynamic>> _teamLocations = [];
   List<Map<String, dynamic>> _myRoutes = [];
   List<Map<String, dynamic>> _sharedPois = [];

@@ -2293,7 +2293,7 @@ function RolesGuideModal({ onClose }: { onClose: () => void }) {
 function ForceManagementPanel({
   expanded, onToggle, allUsers, dbTeams, isLoading,
   onCreateUser, onCreateTeam, onAssignTeam, onRemoveFromTeam, onLocate,
-  currentRole, onResetData,
+  currentRole, onResetData, liveUsers,
 }: {
   expanded: boolean; onToggle: () => void;
   allUsers: UserRecord[]; dbTeams: TeamInfo[]; isLoading: boolean;
@@ -2303,12 +2303,14 @@ function ForceManagementPanel({
   onLocate: (userId: string) => void;
   currentRole?: string | null;
   onResetData: () => void;
+  liveUsers: User[];
 }) {
   const [search, setSearch] = useState("");
   const [showRolesGuide, setShowRolesGuide] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
   const isAdmin = currentRole === "admin" || currentRole === "super_admin";
+  const liveStatusMap = new Map(liveUsers.map(u => [u.user_id, u.status]));
 
   const fieldUnits = allUsers.filter(u => {
     const q = search.toLowerCase();
@@ -2467,17 +2469,30 @@ function ForceManagementPanel({
               {fieldUnits.map(u => {
                 const roleColor = ROLE_COLORS[u.role] ?? "#94a3b8";
                 const teamColor = dbTeams.find(t => t.id === u.teamId)?.color;
+                const gpsStatus = liveStatusMap.get(u.id);
+                const statusDotColor = gpsStatus === "active" ? "#22c55e" : gpsStatus === "stale" ? "#f59e0b" : "#ef4444";
+                const statusLabel = gpsStatus === "active" ? "LIVE" : gpsStatus === "stale" ? "STALE" : "OFFLINE";
                 return (
                   <div key={u.id} className="flex items-center gap-2 px-2 py-2 rounded border border-white/5 hover:bg-white/4 transition-colors"
                     style={{ backgroundColor: "rgba(30,41,59,0.5)" }}>
-                    {/* Avatar */}
-                    <div className="w-7 h-7 rounded-full flex-shrink-0 flex items-center justify-center text-[9px] font-bold"
-                      style={{ backgroundColor: `${roleColor}18`, border: `1.5px solid ${roleColor}50`, color: roleColor }}>
-                      {u.full_name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase()}
+                    {/* Avatar with live status indicator */}
+                    <div className="relative flex-shrink-0">
+                      <div className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold"
+                        style={{ backgroundColor: `${roleColor}18`, border: `1.5px solid ${roleColor}50`, color: roleColor }}>
+                        {u.full_name.split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                      </div>
+                      <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-900"
+                        style={{ backgroundColor: statusDotColor }} title={statusLabel} />
                     </div>
                     {/* Info */}
                     <div className="flex-1 min-w-0">
-                      <div className="text-foreground text-[10px] font-semibold truncate">{u.full_name}</div>
+                      <div className="flex items-center gap-1">
+                        <div className="text-foreground text-[10px] font-semibold truncate">{u.full_name}</div>
+                        <span className="text-[7px] font-bold px-1 rounded flex-shrink-0"
+                          style={{ backgroundColor: `${statusDotColor}20`, color: statusDotColor }}>
+                          {statusLabel}
+                        </span>
+                      </div>
                       <div className="flex items-center gap-1 mt-0.5">
                         <span className="text-[8px] font-bold px-1 rounded" style={{ backgroundColor: `${roleColor}18`, color: roleColor }}>
                           {ROLE_LABELS[u.role] ?? u.role}
@@ -2490,7 +2505,7 @@ function ForceManagementPanel({
                         )}
                         {!u.is_active && (
                           <span className="text-[8px] px-1 rounded" style={{ backgroundColor: "rgba(239,68,68,0.1)", color: "#ef4444" }}>
-                            INACTIVE
+                            DISABLED
                           </span>
                         )}
                       </div>
@@ -3762,24 +3777,21 @@ export default function DODMap() {
         const frontendUsers: User[] = (locsRes.value.data as Array<{
           user_id: string; team_id: string; latitude: number; longitude: number;
           status: string; recorded_at: string; speed?: number; heading?: number;
+          name?: string; team_name?: string;
         }>).reduce<User[]>((acc, loc) => {
           const userId = String(loc.user_id);
-          // Skip duplicates (same user_id appearing multiple times)
           if (seenUserIds.has(userId)) return acc;
           seenUserIds.add(userId);
 
-          // Skip users we don't have info for — no real name = not in our system
+          // Prefer name from LocationResponse (added in recent fix), fall back to usersInfo
           const uInfo = usersInfo.get(userId);
-          if (!uInfo?.name) return acc;
+          const displayName = loc.name ?? uInfo?.name ?? `Unit-${userId.slice(0, 6).toUpperCase()}`;
+          const teamName = loc.team_name ?? teamsMap.get(String(loc.team_id)) ?? "Unknown";
 
-          const teamName = teamsMap.get(String(loc.team_id)) ?? "Team Alpha";
-          const validTeam: Team = (Object.keys(TEAM_COLORS) as Team[]).includes(teamName as Team)
-            ? (teamName as Team)
-            : "Team Alpha";
           acc.push({
             user_id: userId,
-            name: uInfo.name,
-            group: validTeam,
+            name: displayName,
+            group: teamName as Team,
             lat: loc.latitude,
             lng: loc.longitude,
             status: (loc.status ?? "active") as Status,
@@ -3788,7 +3800,7 @@ export default function DODMap() {
             speed: loc.speed ?? 0,
             heading: loc.heading ?? 0,
             flag: null,
-            role: uInfo.role as User["role"] | undefined,
+            role: (uInfo?.role ?? undefined) as User["role"] | undefined,
           });
           return acc;
         }, []);
@@ -3806,14 +3818,15 @@ export default function DODMap() {
 
           locationFetches.forEach((res, i) => {
             if (res.status === "fulfilled" && res.value.data?.latitude != null) {
-              const loc = res.value.data;
+              const loc = res.value.data as { latitude: number; longitude: number; recorded_at?: string; team_id?: string; name?: string; team_name?: string };
               const u = unlocatedUsers[i];
-              const uInfo = usersInfo.get(String(u.id)) ?? { name: u.full_name };
-              // const teamName = "Team Alpha";
+              const uInfo = usersInfo.get(String(u.id));
+              const displayName = loc.name ?? uInfo?.name ?? u.full_name ?? `Unit-${String(u.id).slice(0, 6).toUpperCase()}`;
+              const teamName = loc.team_name ?? teamsMap.get(String(loc.team_id)) ?? "Unknown";
               frontendUsers.push({
                 user_id: String(u.id),
-                name: uInfo.name,
-                group: "Team Alpha" as Team,
+                name: displayName,
+                group: teamName as Team,
                 lat: loc.latitude,
                 lng: loc.longitude,
                 status: "offline",
@@ -3822,7 +3835,7 @@ export default function DODMap() {
                 speed: 0,
                 heading: 0,
                 flag: null,
-                role: uInfo.role as User["role"] | undefined,
+                role: (uInfo?.role ?? undefined) as User["role"] | undefined,
               });
             }
           });
@@ -4076,9 +4089,9 @@ export default function DODMap() {
     const unsubLoc = locationWS.subscribe((msg: unknown) => {
       const m = msg as { type?: string; data?: Record<string, unknown> } & Record<string, unknown>;
       const d = (m.data ?? m) as {
-        team_id(team_id: any): string;
-        user_id?: string; latitude?: number; longitude?: number;
+        user_id?: string; team_id?: string; latitude?: number; longitude?: number;
         speed?: number; heading?: number; status?: string; recorded_at?: string;
+        name?: string; team_name?: string;
       };
       if (!d.user_id) return;
       setUsers(prev => {
@@ -4095,18 +4108,20 @@ export default function DODMap() {
               heading: d.heading ?? u.heading,
               status: (d.status ?? u.status) as Status,
               lastUpdate: new Date(d.recorded_at ?? Date.now()),
+              name: d.name ?? u.name,
+              group: (d.team_name ?? u.group) as Team,
             };
           });
         }
 
-        const teamName = teamsMapRef.current.get(String(d.team_id)) ?? "Team Alpha";
         const userInfo = usersInfoRef.current.get(userId);
+        const teamName = d.team_name ?? teamsMapRef.current.get(String(d.team_id)) ?? "Unknown";
         return [
           ...prev,
           {
             user_id: userId,
-            name: userInfo?.name ?? userId.slice(0, 8),
-            group: (teamName as Team) || "Team Alpha",
+            name: d.name ?? userInfo?.name ?? `Unit-${userId.slice(0, 6).toUpperCase()}`,
+            group: teamName as Team,
             lat: d.latitude ?? 0,
             lng: d.longitude ?? 0,
             status: (d.status ?? "active") as Status,
@@ -5106,6 +5121,7 @@ export default function DODMap() {
               onRemoveFromTeam={handleRemoveFromTeam}
               onLocate={handleLocateUser}
               currentRole={currentUserRole}
+              liveUsers={users}
               onResetData={() => {
                 setUsers([]);
                 setRoutes([]);
