@@ -37,7 +37,7 @@ import { connectAll, disconnectAll, locationWS, messageWS, eventWS, videoAlertWS
 
 // ─────────────────────────── TYPES ───────────────────────────
 type Status = "active" | "stale" | "offline";
-type Team = "Team Alpha" | "Team Bravo" | "Team Charlie" | "Team Delta" | "Team Echo";
+type Team = "Team Alpha" | "Team Bravo" | "Team Charlie" | "Team Delta" | "Team Echo" | "Unknown";
 type FlagType = "safe" | "trouble" | "help";
 type POIType = "checkpoint" | "hospital" | "base" | "observation" | "police" | "supply" | "vehicle" | "meeting" | "command" | "medical" | "extraction";
 type MapViewType = "standard" | "satellite" | "terrain" | "topo" | "dark" | "night";
@@ -177,6 +177,7 @@ const TEAM_COLORS: Record<Team, { primary: string; marker: string; bg: string; b
   "Team Charlie": { primary: "#ef4444", marker: "#dc2626", bg: "rgba(239,68,68,0.15)", border: "#ef4444" },
   "Team Delta": { primary: "#8b5cf6", marker: "#7c3aed", bg: "rgba(139,92,246,0.15)", border: "#8b5cf6" },
   "Team Echo": { primary: "#06b6d4", marker: "#0891b2", bg: "rgba(6,182,212,0.15)", border: "#06b6d4" },
+  "Unknown": { primary: "#94a3b8", marker: "#64748b", bg: "rgba(148,163,184,0.15)", border: "#94a3b8" },
 };
 
 const POI_ICONS_CONFIG: Record<POIType, { icon: React.ReactNode; color: string; label: string; tacticalIcon: string }> = {
