@@ -794,6 +794,207 @@ function MapLegend() {
   );
 }
 
+function FilterModal({
+  show, onClose, filters, onChange, dbTeams, users, liveFeeds, routes,
+}: {
+  show: boolean;
+  onClose: () => void;
+  filters: { statuses: string[]; teams: string[]; hasRoute: boolean; hasEmergency: boolean; hasLive: boolean };
+  onChange: (f: typeof filters) => void;
+  dbTeams: TeamInfo[];
+  users: User[];
+  liveFeeds: { room_id: string; user_id: string }[];
+  routes: Route[];
+}) {
+  if (!show) return null;
+  const toggle = <K extends keyof typeof filters>(key: K, value?: string) => {
+    if (key === "statuses" || key === "teams") {
+      const arr = filters[key] as string[];
+      const next = arr.includes(value!) ? arr.filter(v => v !== value) : [...arr, value!];
+      onChange({ ...filters, [key]: next });
+    } else {
+      onChange({ ...filters, [key]: !filters[key as "hasRoute"] });
+    }
+  };
+  const activeCount = users.filter(u => u.status === "active").length;
+  const staleCount = users.filter(u => u.status === "stale").length;
+  const offlineCount = users.filter(u => u.status === "offline").length;
+  const emergencyCount = users.filter(u => u.flag === "help").length;
+  const liveCount = liveFeeds.length;
+  const routedCount = users.filter(u => routes.some(r => r.assignedTo === u.user_id && r.isActive)).length;
+
+  const chip = (label: string, active: boolean, count: number, color: string, onClick: () => void) => (
+    <button onClick={onClick}
+      className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[10px] font-semibold transition-all cursor-pointer"
+      style={{
+        backgroundColor: active ? `${color}25` : "rgba(30,41,59,0.6)",
+        border: `1px solid ${active ? color : "rgba(255,255,255,0.08)"}`,
+        color: active ? color : "#94a3b8",
+      }}>
+      {label}
+      <span className="text-[8px] px-1 rounded" style={{ backgroundColor: active ? `${color}30` : "rgba(255,255,255,0.06)", color: active ? color : "#64748b" }}>
+        {count}
+      </span>
+    </button>
+  );
+
+  return (
+    <div className="fixed inset-0 z-[8000] flex items-end justify-end" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/50" />
+      <div
+        className="relative m-4 rounded-xl overflow-hidden shadow-2xl w-[280px]"
+        style={{ backgroundColor: "#0f172a", border: "1px solid rgba(255,255,255,0.1)", fontFamily: "'Poppins', sans-serif" }}
+        onClick={e => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
+          <div className="flex items-center gap-2">
+            <FiFilter size={13} color="#3b82f6" />
+            <span className="text-white font-bold text-xs tracking-wide">FILTER MAP</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={() => onChange({ statuses: [], teams: [], hasRoute: false, hasEmergency: false, hasLive: false })}
+              className="text-slate-500 hover:text-slate-300 text-[9px] font-semibold transition-colors cursor-pointer">
+              CLEAR
+            </button>
+            <button onClick={onClose} className="text-slate-500 hover:text-white transition-colors cursor-pointer">
+              <FiX size={14} />
+            </button>
+          </div>
+        </div>
+
+        <div className="p-3 flex flex-col gap-3">
+          {/* Status */}
+          <div>
+            <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider mb-1.5">Status</div>
+            <div className="flex flex-wrap gap-1.5">
+              {chip("Active", filters.statuses.includes("active"), activeCount, "#22c55e", () => toggle("statuses", "active"))}
+              {chip("Stale", filters.statuses.includes("stale"), staleCount, "#f59e0b", () => toggle("statuses", "stale"))}
+              {chip("Offline", filters.statuses.includes("offline"), offlineCount, "#ef4444", () => toggle("statuses", "offline"))}
+            </div>
+          </div>
+
+          {/* Teams */}
+          {dbTeams.length > 0 && (
+            <div>
+              <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider mb-1.5">Team</div>
+              <div className="flex flex-wrap gap-1.5">
+                {dbTeams.map(t => {
+                  const cnt = users.filter(u => u.group === t.name).length;
+                  return chip(t.name.replace(/^Team /i, ""), filters.teams.includes(t.name), cnt, t.color, () => toggle("teams", t.name));
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Special */}
+          <div>
+            <div className="text-slate-500 text-[9px] font-bold uppercase tracking-wider mb-1.5">Special</div>
+            <div className="flex flex-wrap gap-1.5">
+              {chip("Has Route", filters.hasRoute, routedCount, "#3b82f6", () => toggle("hasRoute"))}
+              {chip("Emergency", filters.hasEmergency, emergencyCount, "#ef4444", () => toggle("hasEmergency"))}
+              {chip("Live Feed", filters.hasLive, liveCount, "#ef4444", () => toggle("hasLive"))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ActiveSoldiersPanel({
+  users, expanded, onToggle, onLocate, routes, liveFeeds,
+}: {
+  users: User[]; expanded: boolean; onToggle: () => void;
+  onLocate: (user: User) => void;
+  routes: Route[];
+  liveFeeds: { room_id: string; user_id: string }[];
+}) {
+  const sorted = [...users].sort((a, b) => {
+    const order = { active: 0, stale: 1, offline: 2 } as Record<string, number>;
+    return (order[a.status] ?? 2) - (order[b.status] ?? 2);
+  });
+  const active = users.filter(u => u.status === "active").length;
+  const stale = users.filter(u => u.status === "stale").length;
+  const offline = users.filter(u => u.status === "offline" || u.lat === 0).length;
+
+  const statusColor = (s: string) =>
+    s === "active" ? "#22c55e" : s === "stale" ? "#f59e0b" : "#ef4444";
+
+  const hasRoute = (uid: string) => routes.some(r => r.assignedTo === uid || r.isActive);
+  const hasLive = (uid: string) => liveFeeds.some(f => f.user_id === uid);
+
+  return (
+    <div className="bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden">
+      <PanelHeader
+        title="Active Soldiers"
+        icon={<FiUser size={13} />}
+        expanded={expanded}
+        onToggle={onToggle}
+        badge={active || undefined}
+      />
+      {expanded && (
+        <div className="flex flex-col">
+          {/* Summary bar */}
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-white/5">
+            <span className="flex items-center gap-1 text-[9px] font-bold text-green-400">
+              <span className="w-2 h-2 rounded-full bg-green-500 inline-block" />{active} LIVE
+            </span>
+            <span className="flex items-center gap-1 text-[9px] font-bold text-yellow-400">
+              <span className="w-2 h-2 rounded-full bg-yellow-500 inline-block" />{stale} STALE
+            </span>
+            <span className="flex items-center gap-1 text-[9px] font-bold text-red-400">
+              <span className="w-2 h-2 rounded-full bg-red-500 inline-block" />{offline} OFF
+            </span>
+          </div>
+          {/* Soldier list */}
+          <div className="max-h-[320px] overflow-y-auto custom-scrollbar divide-y divide-white/5">
+            {sorted.length === 0 ? (
+              <div className="text-center py-5 text-slate-600 text-[10px]">No soldiers registered</div>
+            ) : sorted.map(u => {
+              const hasGPS = u.lat !== 0 || u.lng !== 0;
+              const live = hasLive(u.user_id);
+              const routed = hasRoute(u.user_id);
+              return (
+                <div
+                  key={u.user_id}
+                  className="flex items-center gap-2 px-2.5 py-2 hover:bg-white/4 cursor-pointer transition-colors"
+                  onClick={() => hasGPS && onLocate(u)}
+                  title={hasGPS ? "Click to locate on map" : "No GPS yet"}
+                >
+                  <div className="relative flex-shrink-0">
+                    <div className="w-7 h-7 rounded-full flex items-center justify-center text-[9px] font-bold"
+                      style={{ backgroundColor: `${statusColor(u.status)}18`, border: `1.5px solid ${statusColor(u.status)}60`, color: statusColor(u.status) }}>
+                      {(u.name || "?").split(" ").map((w: string) => w[0]).join("").slice(0, 2).toUpperCase()}
+                    </div>
+                    <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border border-slate-900"
+                      style={{ backgroundColor: statusColor(u.status) }} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1">
+                      <span className="text-foreground text-[10px] font-semibold truncate">{u.name}</span>
+                      {live && <span className="text-[7px] font-bold px-1 rounded bg-red-500/20 text-red-400">LIVE</span>}
+                      {routed && <span className="text-[7px] font-bold px-1 rounded bg-blue-500/20 text-blue-400">ROUTE</span>}
+                      {u.flag === "help" && <span className="text-[7px] font-bold px-1 rounded bg-red-500/30 text-red-300">SOS</span>}
+                    </div>
+                    <div className="text-[8px] text-slate-500 truncate">
+                      {u.group !== "Unknown" ? u.group.replace(/^Team /i, "") : "—"} ·{" "}
+                      {!hasGPS ? "No GPS" : u.status === "active" ? "Live" : u.status === "stale" ? `${Math.round((Date.now() - u.lastUpdate.getTime()) / 1000)}s ago` : "Offline"}
+                    </div>
+                  </div>
+                  {hasGPS && (
+                    <FiCrosshair size={11} className="text-slate-500 hover:text-primary flex-shrink-0 transition-colors" />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function TeamOverviewPanel({
   users,
   expanded,
@@ -837,53 +1038,32 @@ function TeamOverviewPanel({
             </div>
           )}
 
-          {/* Real team rows from DB */}
+          {/* Team rows: Online / Offline */}
           {!isLoading && dbTeams.length > 0 && (
-            <table className="w-full text-[10px] md:text-xs border-collapse">
-              <thead>
-                <tr className="border-b border-white/5">
-                  {["Team", "A", "S", "O", "T"].map((h, i) => (
-                    <th
-                      key={i}
-                      title={["Team Name", "Active (has live location)", "Stale (>30s)", "Offline (registered but no data)", "Total registered"][i]}
-                      className={`px-1.5 md:px-2 py-1.5 text-slate-500 font-semibold cursor-help ${i === 0 ? "text-left" : "text-center"}`}
-                    >
-                      {h}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {dbTeams.map(team => {
-                  const locUsers = users.filter(u => u.group === team.name);
-                  const a = locUsers.filter(u => u.status === "active").length;
-                  const s = locUsers.filter(u => u.status === "stale").length;
-                  // Offline = registered members minus those with active/stale locations
-                  const o = Math.max(0, team.memberCount - a - s);
-                  const total = team.memberCount;
-                  return (
-                    <tr
-                      key={team.id}
-                      className="border-b border-white/5 hover:bg-white/5 cursor-pointer transition-colors"
-                      onClick={() => onSelectTeam(team.name)}
-                    >
-                      <td className="px-1.5 md:px-2 py-2">
-                        <div className="flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: team.color }} />
-                          <span className="text-foreground font-semibold truncate">
-                            {team.name.replace(/^Team /i, "")}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="text-center text-green-500 font-bold">{a}</td>
-                      <td className="text-center text-yellow-500 font-bold">{s}</td>
-                      <td className="text-center text-red-400 font-bold">{o}</td>
-                      <td className="text-center text-slate-400 font-semibold">{total}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+            <div className="divide-y divide-white/5">
+              {dbTeams.map(team => {
+                const teamUsers = users.filter(u => u.group === team.name);
+                const online = teamUsers.filter(u => u.status === "active" || u.status === "stale").length;
+                const offline = Math.max(0, team.memberCount - online);
+                return (
+                  <div
+                    key={team.id}
+                    className="flex items-center gap-2 px-3 py-2 hover:bg-white/5 cursor-pointer transition-colors"
+                    onClick={() => onSelectTeam(team.name)}
+                  >
+                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: team.color }} />
+                    <span className="flex-1 text-foreground text-[10px] font-semibold truncate">
+                      {team.name.replace(/^Team /i, "")}
+                    </span>
+                    <span className="flex items-center gap-0.5 text-[10px] font-bold text-green-400" title="Online">
+                      <span className="w-1.5 h-1.5 rounded-full bg-green-500" />{online}
+                    </span>
+                    <span className="text-slate-600 text-[8px]">/</span>
+                    <span className="text-[10px] font-bold text-red-400" title="Offline">{offline}</span>
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
@@ -3539,6 +3719,14 @@ export default function DODMap() {
   const [events, setEvents] = useState<Event[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [teamFilter, setTeamFilter] = useState<Team | "All">("All");
+  const [showFilterModal, setShowFilterModal] = useState(false);
+  const [activeFilters, setActiveFilters] = useState({
+    statuses: [] as string[],     // empty = all statuses
+    teams: [] as string[],        // empty = all teams
+    hasRoute: false,
+    hasEmergency: false,
+    hasLive: false,
+  });
   const [messages, setMessages] = useState<Message[]>([]);
   const [msgModal, setMsgModal] = useState<string | null>(null);
   const [sosIncident, setSosIncident] = useState<SOSIncident | null>(null);
@@ -3588,6 +3776,7 @@ export default function DODMap() {
   const usersInfoRef = useRef<Map<string, { name: string; role?: string }>>(new Map());
 
   const [panels, setPanels] = useState({
+    activeSoldiers: true,
     teamOverview: false,
     selectedUser: false,
     alerts: false,
@@ -3750,6 +3939,7 @@ export default function DODMap() {
       // Build team + user info maps
       const teamsMap = new Map<string, string>();
       const usersInfo = new Map<string, { name: string; role?: string }>();
+      const userToTeam = new Map<string, string>(); // userId → teamName
       if (teamsRes.status === "fulfilled") {
         const teamData = teamsRes.value.data as Array<{
           id: string; name: string; color?: string; member_count?: number;
@@ -3765,80 +3955,86 @@ export default function DODMap() {
           teamsMap.set(t.id, t.name);
           for (const m of t.members ?? []) {
             usersInfo.set(String(m.user_id), { name: m.user_name, role: m.role });
+            userToTeam.set(String(m.user_id), t.name);
           }
         }
         teamsMapRef.current = teamsMap;
         usersInfoRef.current = usersInfo;
       }
 
-      // Locations → users (show real data; empty = no units deployed yet)
-      if (locsRes.status === "fulfilled") {
-        const seenUserIds = new Set<string>();
-        const frontendUsers: User[] = (locsRes.value.data as Array<{
-          user_id: string; team_id: string; latitude: number; longitude: number;
-          status: string; recorded_at: string; speed?: number; heading?: number;
-          name?: string; team_name?: string;
-        }>).reduce<User[]>((acc, loc) => {
-          const userId = String(loc.user_id);
-          if (seenUserIds.has(userId)) return acc;
-          seenUserIds.add(userId);
+      // Build user list: start with ALL registered field units, then overlay live location data.
+      // This ensures every soldier appears from the moment they log in.
+      {
+        // Step 1: seed from registered accounts (all field_unit roles)
+        const frontendUsers: User[] = [];
+        const registeredIds = new Set<string>();
 
-          // Prefer name from LocationResponse (added in recent fix), fall back to usersInfo
-          const uInfo = usersInfo.get(userId);
-          const displayName = loc.name ?? uInfo?.name ?? `Unit-${userId.slice(0, 6).toUpperCase()}`;
-          const teamName = loc.team_name ?? teamsMap.get(String(loc.team_id)) ?? "Unknown";
-
-          acc.push({
-            user_id: userId,
-            name: displayName,
-            group: teamName as Team,
-            lat: loc.latitude,
-            lng: loc.longitude,
-            status: (loc.status ?? "active") as Status,
-            lastUpdate: new Date(loc.recorded_at ?? Date.now()),
-            message: "Field position",
-            speed: loc.speed ?? 0,
-            heading: loc.heading ?? 0,
-            flag: null,
-            role: (uInfo?.role ?? undefined) as User["role"] | undefined,
-          });
-          return acc;
-        }, []);
-
-        // Add offline field units with their last known location
         if (allUsersRes.status === "fulfilled") {
-          const locatedUserIds = new Set(frontendUsers.map(u => u.user_id));
-          const unlocatedUsers = (allUsersRes.value.data.items as Array<{
-            id: string; full_name: string; role: string;
-          }>).filter(u => u.role === "field_unit" && !locatedUserIds.has(String(u.id)));
+          const rawAll = allUsersRes.value.data.items as Array<{
+            id: string; full_name: string; username: string; role: string; is_active: boolean;
+          }>;
+          for (const u of rawAll) {
+            if (u.role !== "field_unit") continue;
+            const uid = String(u.id);
+            registeredIds.add(uid);
+            const uInfo = usersInfo.get(uid);
+            const teamName = userToTeam.get(uid) ?? "Unknown";
+            frontendUsers.push({
+              user_id: uid,
+              name: uInfo?.name ?? u.full_name ?? `Unit-${uid.slice(0, 6).toUpperCase()}`,
+              group: teamName as Team,
+              lat: 0,
+              lng: 0,
+              status: "offline" as Status,
+              lastUpdate: new Date(0),
+              message: "No location yet",
+              speed: 0,
+              heading: 0,
+              flag: null,
+              role: (uInfo?.role ?? "field_unit") as User["role"] | undefined,
+            });
+          }
+        }
 
-          const locationFetches = await Promise.allSettled(
-            unlocatedUsers.map(u => api.getUserLocation(String(u.id)))
-          );
+        // Step 2: overlay live location data
+        if (locsRes.status === "fulfilled") {
+          const locData = locsRes.value.data as Array<{
+            user_id: string; team_id?: string; latitude: number; longitude: number;
+            status: string; recorded_at: string; speed?: number; heading?: number;
+            name?: string; team_name?: string;
+          }>;
+          const seenInLocs = new Set<string>();
+          for (const loc of locData) {
+            const userId = String(loc.user_id);
+            if (seenInLocs.has(userId)) continue;
+            seenInLocs.add(userId);
 
-          locationFetches.forEach((res, i) => {
-            if (res.status === "fulfilled" && res.value.data?.latitude != null) {
-              const loc = res.value.data as { latitude: number; longitude: number; recorded_at?: string; team_id?: string; name?: string; team_name?: string };
-              const u = unlocatedUsers[i];
-              const uInfo = usersInfo.get(String(u.id));
-              const displayName = loc.name ?? uInfo?.name ?? u.full_name ?? `Unit-${String(u.id).slice(0, 6).toUpperCase()}`;
-              const teamName = loc.team_name ?? teamsMap.get(String(loc.team_id)) ?? "Unknown";
-              frontendUsers.push({
-                user_id: String(u.id),
-                name: displayName,
-                group: teamName as Team,
-                lat: loc.latitude,
-                lng: loc.longitude,
-                status: "offline",
-                lastUpdate: new Date(loc.recorded_at ?? Date.now()),
-                message: "Last known position",
-                speed: 0,
-                heading: 0,
-                flag: null,
-                role: (uInfo?.role ?? undefined) as User["role"] | undefined,
-              });
+            const uInfo = usersInfo.get(userId);
+            const displayName = loc.name ?? uInfo?.name ?? `Unit-${userId.slice(0, 6).toUpperCase()}`;
+            const teamName = loc.team_name ?? teamsMap.get(String(loc.team_id)) ?? "Unknown";
+            const entry: User = {
+              user_id: userId,
+              name: displayName,
+              group: teamName as Team,
+              lat: loc.latitude,
+              lng: loc.longitude,
+              status: (loc.status ?? "active") as Status,
+              lastUpdate: new Date(loc.recorded_at ?? Date.now()),
+              message: "Field position",
+              speed: loc.speed ?? 0,
+              heading: loc.heading ?? 0,
+              flag: null,
+              role: (uInfo?.role ?? "field_unit") as User["role"] | undefined,
+            };
+
+            const idx = frontendUsers.findIndex(u => u.user_id === userId);
+            if (idx >= 0) {
+              frontendUsers[idx] = entry;
+            } else if (!registeredIds.has(userId)) {
+              // User has a location but is not in allUsers (edge case) — still show them
+              frontendUsers.push(entry);
             }
-          });
+          }
         }
 
         setUsers(frontendUsers);
@@ -4088,6 +4284,16 @@ export default function DODMap() {
 
     const unsubLoc = locationWS.subscribe((msg: unknown) => {
       const m = msg as { type?: string; data?: Record<string, unknown> } & Record<string, unknown>;
+
+      // When a soldier connects to WS, mark them as recently seen in the sidebar
+      if (m.type === "user_connected" && m.data?.user_id) {
+        const connId = String(m.data.user_id);
+        setUsers(prev => prev.map(u =>
+          u.user_id === connId ? { ...u, lastUpdate: new Date() } : u
+        ));
+        return;
+      }
+
       const d = (m.data ?? m) as {
         user_id?: string; team_id?: string; latitude?: number; longitude?: number;
         speed?: number; heading?: number; status?: string; recorded_at?: string;
@@ -4716,7 +4922,19 @@ export default function DODMap() {
     URL.revokeObjectURL(url);
   };
 
-  const filteredUsers = teamFilter === "All" ? users : users.filter(u => u.group === teamFilter);
+  const filteredUsers = users.filter(u => {
+    // Legacy team filter (kept for backward compat with sidebar team click)
+    if (teamFilter !== "All" && u.group !== teamFilter) return false;
+    // Advanced filter panel
+    if (activeFilters.statuses.length > 0 && !activeFilters.statuses.includes(u.status)) return false;
+    if (activeFilters.teams.length > 0 && !activeFilters.teams.includes(u.group)) return false;
+    if (activeFilters.hasRoute && !routes.some(r => r.assignedTo === u.user_id && r.isActive)) return false;
+    if (activeFilters.hasEmergency && u.flag !== "help") return false;
+    if (activeFilters.hasLive && !liveFeeds.some(f => f.user_id === u.user_id)) return false;
+    return true;
+  });
+  const isAnyFilterActive = activeFilters.statuses.length > 0 || activeFilters.teams.length > 0
+    || activeFilters.hasRoute || activeFilters.hasEmergency || activeFilters.hasLive;
   const alertCount = users.filter(u => u.status === "offline" || u.flag === "help").length;
   const mapTileConfig = MAP_TILES[mapView];
 
@@ -4807,8 +5025,8 @@ export default function DODMap() {
                 return lines;
               })()}
 
-              {/* User Markers */}
-              {filteredUsers.map(user => (
+              {/* User Markers — only draw soldiers who have sent at least one GPS fix */}
+              {filteredUsers.filter(u => u.lat !== 0 || u.lng !== 0).map(user => (
                 <Marker
                   key={user.user_id}
                   position={[user.lat, user.lng]}
@@ -5042,6 +5260,42 @@ export default function DODMap() {
           style={{ height: 'calc(100vh - 48px)' }}
         >
           <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 p-2">
+            {/* Filter button row */}
+            <div className="flex gap-1.5">
+              <button
+                onClick={() => setShowFilterModal(true)}
+                className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 rounded text-[10px] font-semibold transition-all cursor-pointer hover:opacity-80"
+                style={{
+                  backgroundColor: isAnyFilterActive ? "rgba(59,130,246,0.2)" : "rgba(30,41,59,0.8)",
+                  border: `1px solid ${isAnyFilterActive ? "rgba(59,130,246,0.5)" : "rgba(255,255,255,0.08)"}`,
+                  color: isAnyFilterActive ? "#3b82f6" : "#94a3b8",
+                }}
+              >
+                <FiFilter size={11} />
+                {isAnyFilterActive ? "Filtered" : "Filter"} Map
+                {isAnyFilterActive && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 ml-0.5" />
+                )}
+              </button>
+              {isAnyFilterActive && (
+                <button
+                  onClick={() => setActiveFilters({ statuses: [], teams: [], hasRoute: false, hasEmergency: false, hasLive: false })}
+                  className="px-2 py-1.5 rounded text-[10px] font-semibold text-slate-500 hover:text-white transition-colors cursor-pointer"
+                  style={{ backgroundColor: "rgba(30,41,59,0.8)", border: "1px solid rgba(255,255,255,0.08)" }}
+                >
+                  <FiX size={11} />
+                </button>
+              )}
+            </div>
+
+            <ActiveSoldiersPanel
+              users={users}
+              expanded={panels.activeSoldiers}
+              onToggle={() => togglePanel("activeSoldiers")}
+              onLocate={focusUserOnMap}
+              routes={routes}
+              liveFeeds={liveFeeds}
+            />
             <TeamOverviewPanel
               users={users}
               dbTeams={dbTeams}
@@ -5196,6 +5450,17 @@ export default function DODMap() {
       {showAllEvents && (
         <AllEventsModal onClose={() => setShowAllEvents(false)} usersInfoRef={usersInfoRef} />
       )}
+
+      <FilterModal
+        show={showFilterModal}
+        onClose={() => setShowFilterModal(false)}
+        filters={activeFilters}
+        onChange={setActiveFilters}
+        dbTeams={dbTeams}
+        users={users}
+        liveFeeds={liveFeeds}
+        routes={routes}
+      />
 
       {showCreateUser && (
         <CreateUserModal
