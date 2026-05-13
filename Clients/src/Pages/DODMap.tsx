@@ -6,6 +6,7 @@ import {
   Popup,
   Polyline,
   Polygon,
+  Circle,
   CircleMarker,
   useMapEvents,
   useMap,
@@ -538,6 +539,60 @@ function MapEventsHandler({
       if (routeDrawMode) {
         onMapClick(e.latlng.lat, e.latlng.lng);
       }
+    },
+  });
+  return null;
+}
+
+function haversineMetres(a: [number, number], b: [number, number]): number {
+  const R = 6371000;
+  const dLat = (b[0] - a[0]) * Math.PI / 180;
+  const dLng = (b[1] - a[1]) * Math.PI / 180;
+  const x = Math.sin(dLat / 2) ** 2 +
+    Math.cos(a[0] * Math.PI / 180) * Math.cos(b[0] * Math.PI / 180) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
+}
+
+function CircleDrawHandler({
+  active,
+  onUpdate,
+  onConfirm,
+}: {
+  active: boolean;
+  onUpdate: (center: [number, number], radiusM: number) => void;
+  onConfirm: (center: [number, number], radiusM: number) => void;
+}) {
+  const map = useMap();
+  const dragging = useRef(false);
+  const center = useRef<[number, number] | null>(null);
+
+  useEffect(() => {
+    const el = map.getContainer();
+    el.style.cursor = active ? "crosshair" : "";
+    return () => { el.style.cursor = ""; };
+  }, [active, map]);
+
+  useMapEvents({
+    mousedown(e) {
+      if (!active) return;
+      // Prevent leaflet drag while we're drawing
+      map.dragging.disable();
+      dragging.current = true;
+      center.current = [e.latlng.lat, e.latlng.lng];
+      onUpdate([e.latlng.lat, e.latlng.lng], 0);
+    },
+    mousemove(e) {
+      if (!active || !dragging.current || !center.current) return;
+      const r = haversineMetres(center.current, [e.latlng.lat, e.latlng.lng]);
+      onUpdate(center.current, r);
+    },
+    mouseup(e) {
+      if (!active || !dragging.current || !center.current) return;
+      map.dragging.enable();
+      dragging.current = false;
+      const r = haversineMetres(center.current, [e.latlng.lat, e.latlng.lng]);
+      if (r > 10) onConfirm(center.current, r); // min 10m
+      center.current = null;
     },
   });
   return null;
@@ -1579,6 +1634,8 @@ function QuickActionsPanel({
   onPOITypeChange,
   onZoneMode,
   zoneMode,
+  onCircleMode,
+  circleMode,
 }: {
   expanded: boolean;
   onToggle: () => void;
@@ -1593,13 +1650,15 @@ function QuickActionsPanel({
   onPOITypeChange: (type: POIType) => void;
   onZoneMode: () => void;
   zoneMode: boolean;
+  onCircleMode: () => void;
+  circleMode: boolean;
 }) {
   const btns = [
     { icon: <FiFilter size={13} />, label: `Filter: ${teamFilter === "All" ? "All" : teamFilter.replace("Team ", "")}`, action: onTeamFilter },
     { icon: <FiMessageSquare size={13} />, label: "MSG All", action: onMessageAll },
     { icon: <FiDownload size={13} />, label: "Export", action: onExport },
     { icon: <TbRoute size={13} />, label: routeDrawMode ? "Drawing..." : "Draw RTE", action: onRouteMode, active: routeDrawMode },
-    { icon: <FiHexagon size={13} />, label: zoneMode ? "Zoning..." : "Zone", action: onZoneMode, active: zoneMode },
+    { icon: <FiHexagon size={13} />, label: circleMode ? (circleMode ? "Click edge..." : "Circle Zone") : "Circle Zone", action: onCircleMode, active: circleMode },
     { icon: <FiRefreshCw size={13} />, label: "Refresh", action: onRefresh },
   ];
 
@@ -3725,6 +3784,118 @@ function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boo
   );
 }
 
+// ─────────────────────────── CIRCLE ZONE MODAL ───────────────────────
+function CircleZoneModal({ center, radius, dbTeams, onSave, onCancel }: {
+  center: [number, number];
+  radius: number;
+  dbTeams: TeamInfo[];
+  onSave: (name: string, zoneType: string, color: string, teamIds: string[]) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState(`Zone ${new Date().toLocaleTimeString()}`);
+  const [zoneType, setZoneType] = useState("perimeter");
+  const [color, setColor] = useState("#ec4899");
+  const [selectedTeams, setSelectedTeams] = useState<string[]>([]);
+
+  const ZONE_TYPES = ["perimeter", "restricted", "safe", "patrol", "staging", "threat"];
+  const COLORS = ["#ec4899", "#ef4444", "#22c55e", "#3b82f6", "#f59e0b", "#8b5cf6", "#06b6d4"];
+
+  const toggleTeam = (id: string) =>
+    setSelectedTeams(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]);
+
+  return (
+    <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60" onClick={onCancel}>
+      <div
+        className="rounded-xl p-5 w-[320px]"
+        style={{ backgroundColor: "#0f172a", border: "1px solid rgba(236,72,153,0.4)", fontFamily: "'Poppins', sans-serif" }}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 mb-4">
+          <FiHexagon size={16} color={color} />
+          <span className="text-white font-bold text-sm">New Circle Zone</span>
+          <span className="text-slate-500 text-[10px] ml-auto">{Math.round(radius)}m radius</span>
+        </div>
+
+        {/* Name */}
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="Zone name…"
+          className="w-full bg-slate-800 border border-white/10 rounded px-2.5 py-2 text-white text-[11px] mb-3 focus:outline-none focus:border-pink-500/50"
+        />
+
+        {/* Zone type */}
+        <div className="mb-3">
+          <div className="text-slate-500 text-[9px] uppercase tracking-wider mb-1.5">Zone Type</div>
+          <div className="flex flex-wrap gap-1">
+            {ZONE_TYPES.map(zt => (
+              <button key={zt} onClick={() => setZoneType(zt)}
+                className="px-2 py-1 rounded text-[9px] font-bold capitalize transition-all cursor-pointer"
+                style={{
+                  backgroundColor: zoneType === zt ? `${color}25` : "rgba(30,41,59,0.8)",
+                  border: `1px solid ${zoneType === zt ? color : "rgba(255,255,255,0.08)"}`,
+                  color: zoneType === zt ? color : "#94a3b8",
+                }}>
+                {zt}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Color */}
+        <div className="mb-3">
+          <div className="text-slate-500 text-[9px] uppercase tracking-wider mb-1.5">Color</div>
+          <div className="flex gap-2">
+            {COLORS.map(c => (
+              <button key={c} onClick={() => setColor(c)}
+                className="w-6 h-6 rounded-full cursor-pointer transition-all"
+                style={{ backgroundColor: c, outline: color === c ? `2px solid white` : "none", outlineOffset: 2 }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Team visibility */}
+        {dbTeams.length > 0 && (
+          <div className="mb-4">
+            <div className="text-slate-500 text-[9px] uppercase tracking-wider mb-1.5">Visible To Teams</div>
+            <div className="flex flex-wrap gap-1.5">
+              {dbTeams.map(t => (
+                <button key={t.id} onClick={() => toggleTeam(t.id)}
+                  className="flex items-center gap-1 px-2 py-1 rounded text-[9px] font-semibold cursor-pointer transition-all"
+                  style={{
+                    backgroundColor: selectedTeams.includes(t.id) ? `${t.color}25` : "rgba(30,41,59,0.8)",
+                    border: `1px solid ${selectedTeams.includes(t.id) ? t.color : "rgba(255,255,255,0.08)"}`,
+                    color: selectedTeams.includes(t.id) ? t.color : "#94a3b8",
+                  }}>
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: t.color }} />
+                  {t.name.replace(/^Team /i, "")}
+                </button>
+              ))}
+            </div>
+            {selectedTeams.length === 0 && (
+              <div className="text-slate-600 text-[9px] mt-1">Leave empty = visible to all</div>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-2">
+          <button onClick={onCancel}
+            className="flex-1 py-2 rounded text-[11px] font-semibold text-slate-400 hover:text-white transition-colors cursor-pointer"
+            style={{ backgroundColor: "rgba(148,163,184,0.1)", border: "1px solid rgba(148,163,184,0.2)" }}>
+            CANCEL
+          </button>
+          <button onClick={() => name.trim() && onSave(name.trim(), zoneType, color, selectedTeams)}
+            className="flex-1 py-2 rounded text-[11px] font-semibold transition-all hover:opacity-80 cursor-pointer"
+            style={{ backgroundColor: color, color: "white" }}>
+            SAVE ZONE
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─────────────────────────── MAIN COMPONENT ───────────────────────────
 export default function DODMap() {
   const [users, setUsers] = useState<User[]>([]);
@@ -3756,6 +3927,11 @@ export default function DODMap() {
   const [sessionRoads, setSessionRoads] = useState<Map<string, [number, number][]>>(new Map());
   const [routeDrawMode, setRouteDrawMode] = useState(false);
   const [zoneMode, setZoneMode] = useState(false);
+  const [circleMode, setCircleMode] = useState(false);
+  const [circleCenter, setCircleCenter] = useState<[number, number] | null>(null);
+  const [circleRadius, setCircleRadius] = useState(0); // metres
+  const [showCircleModal, setShowCircleModal] = useState(false);
+  const [circleZones, setCircleZones] = useState<Array<{ id: string; center_lat: number; center_lng: number; radius_m: number; name: string; color: string; zone_type: string; assigned_team_ids: string[] }>>([]);
   const [pendingRoute, setPendingRoute] = useState<Waypoint[]>([]);
   const [showRouteModal, setShowRouteModal] = useState(false);
   const [pois, setPois] = useState<POI[]>([]);
@@ -3935,6 +4111,15 @@ export default function DODMap() {
         const stillPending = pending.filter(p => !serverIds.has(p.id));
         return [...refreshedPOIs, ...stillPending];
       });
+
+      // Load circle zones
+      try {
+        const zonesRes = await api.listZones({ is_active: true });
+        const allZones = zonesRes.data as Array<{ id: string; center_lat?: number; center_lng?: number; radius_m?: number; name: string; color: string; zone_type: string; assigned_team_ids?: string[] }>;
+        setCircleZones(
+          allZones.filter(z => z.radius_m != null && z.center_lat != null) as typeof circleZones
+        );
+      } catch (_) {}
     } catch {
       // Keep current state if refresh fails.
     }
@@ -4288,6 +4473,13 @@ export default function DODMap() {
         })));
       }
 
+      // Load circle zones on initial page load
+      try {
+        const zonesRes = await api.listZones({ is_active: true });
+        const allZones = zonesRes.data as Array<{ id: string; center_lat?: number; center_lng?: number; radius_m?: number; name: string; color: string; zone_type: string; assigned_team_ids?: string[] }>;
+        setCircleZones(allZones.filter(z => z.radius_m != null && z.center_lat != null) as typeof circleZones);
+      } catch (_) {}
+
       setIsConnected(true);
       isConnectedRef.current = true;
       connectAll(token);
@@ -4569,8 +4761,19 @@ export default function DODMap() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFollowSessions]);
 
-  const _joinLiveFeed = useCallback((meta: { room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number }, token: string) => {
+  const _joinLiveFeed = useCallback(async (meta: { room_id: string; user_id: string; user_name: string; team_name: string; lat?: number; lng?: number }, token: string) => {
     if (liveWsRefs.current.has(meta.room_id)) return; // already joined
+
+    // ── Acquire mic FIRST so it is in the SDP answer when negotiation happens ──
+    if (!commanderMicRef.current) {
+      try {
+        commanderMicRef.current = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.warn("[DRD Mic] Permission denied — commander will listen only:", e);
+      }
+    }
+
     const wsUrl = `${BASE_WS}/ws/video/${meta.room_id}?token=${token}`;
     const ws = new WebSocket(wsUrl);
     liveWsRefs.current.set(meta.room_id, ws);
@@ -4579,34 +4782,19 @@ export default function DODMap() {
 
     // Video: receive only (field unit's camera)
     pc.addTransceiver("video", { direction: "recvonly" });
-    // Audio: sendrecv — commander can speak back to the field unit
-    pc.addTransceiver("audio", { direction: "sendrecv" });
 
-    // Get commander's mic (reuse stream if already acquired)
-    if (!commanderMicRef.current) {
-      navigator.mediaDevices.getUserMedia({ audio: true, video: false })
-        .then(stream => {
-          commanderMicRef.current = stream;
-          // Add mic track to all active peer connections
-          liveWsRefs.current.forEach((_, roomId) => {
-            const feed = liveFeeds.find(f => f.room_id === roomId);
-            if (feed?.pc) {
-              stream.getAudioTracks().forEach(track => {
-                try { feed.pc!.addTrack(track, stream); } catch (_) {}
-              });
-            }
-          });
-        })
-        .catch(() => {}); // mic permission denied — continue without speaking
-    }
-    // Add mic tracks to this new connection if mic already acquired
+    // Audio: add the mic track now — this creates a sendrecv transceiver automatically.
+    // The track is ALREADY available so the SDP answer will include it correctly.
     if (commanderMicRef.current) {
       commanderMicRef.current.getAudioTracks().forEach(track => {
-        try { pc.addTrack(track, commanderMicRef.current!); } catch (_) {}
+        pc.addTrack(track, commanderMicRef.current!);
       });
+    } else {
+      // No mic access — receive-only audio
+      pc.addTransceiver("audio", { direction: "recvonly" });
     }
 
-    const newFeed: LiveFeed = { ...meta, pc, muted: false, micMuted: false };
+    const newFeed: LiveFeed = { ...meta, pc, muted: false, micMuted: !commanderMicRef.current };
 
     pc.ontrack = (e) => {
       // eslint-disable-next-line no-console
@@ -4924,6 +5112,53 @@ export default function DODMap() {
     }
   };
 
+  const handleCircleMode = () => {
+    if (circleMode) {
+      setCircleMode(false);
+      setCircleCenter(null);
+      setCircleRadius(0);
+    } else {
+      setCircleMode(true);
+      setZoneMode(false);
+      setRouteDrawMode(false);
+      setPendingRoute([]);
+    }
+  };
+
+  const handleSaveCircleZone = async (name: string, zoneType: string, color: string, teamIds: string[]) => {
+    if (!circleCenter || circleRadius <= 0) return;
+    setShowCircleModal(false);
+    setCircleMode(false);
+    const [lat, lng] = circleCenter;
+    const r = circleRadius;
+    setCircleCenter(null);
+    setCircleRadius(0);
+
+    if (!isConnectedRef.current) return;
+    try {
+      const res = await api.createZone({
+        name,
+        zone_type: zoneType,
+        color,
+        center_lat: lat,
+        center_lng: lng,
+        radius_m: r,
+        coordinates: [],
+        assigned_team_ids: teamIds,
+        assigned_user_ids: [],
+      });
+      const z = res.data as { id: string; center_lat: number; center_lng: number; radius_m: number; zone_type: string; name: string; color: string; assigned_team_ids: string[] };
+      setEvents(prev => [{
+        id: `zone_${Date.now()}`, time: new Date(), type: "ZONE",
+        user: "Commander", team: "Team Alpha",
+        event: `Zone "${name}" created (${Math.round(r)}m radius)`, location: `${lat.toFixed(4)}, ${lng.toFixed(4)}`,
+      }, ...prev]);
+      await refreshRoutesAndPois();
+    } catch (e) {
+      console.warn("Failed to save circle zone", e);
+    }
+  };
+
   const handleCreateRouteForUser = (userId: string) => {
     setRouteDrawMode(true);
     setZoneMode(false);
@@ -5125,6 +5360,11 @@ export default function DODMap() {
               />
 
               <MapEventsHandler onMapClick={handleMapClick} routeDrawMode={routeDrawMode || zoneMode} />
+              <CircleDrawHandler
+                active={circleMode}
+                onUpdate={(c, r) => { setCircleCenter(c); setCircleRadius(r); }}
+                onConfirm={(c, r) => { setCircleCenter(c); setCircleRadius(r); setShowCircleModal(true); }}
+              />
               <MapFlyController target={mapFlyTarget} />
 
               {/* POI Markers */}
@@ -5250,6 +5490,39 @@ export default function DODMap() {
                     </React.Fragment>
                   );
                 })}
+
+              {/* Circle zone live preview while drawing */}
+              {circleMode && circleCenter && (
+                <>
+                  <CircleMarker center={circleCenter} radius={8} pathOptions={{ color: "#ec4899", fillColor: "#ec4899", fillOpacity: 1 }} />
+                  {circleRadius > 0 && (
+                    <Circle
+                      center={circleCenter}
+                      radius={circleRadius}
+                      pathOptions={{ color: "#ec4899", fillColor: "#ec4899", fillOpacity: 0.1, weight: 2, dashArray: "6 4" }}
+                    />
+                  )}
+                </>
+              )}
+
+              {/* Saved circle zones from server */}
+              {circleZones.map(z => (
+                <Circle key={`cz-${z.id}`}
+                  center={[z.center_lat, z.center_lng]}
+                  radius={z.radius_m}
+                  pathOptions={{ color: z.color, fillColor: z.color, fillOpacity: 0.12, weight: 2.5 }}
+                >
+                  <Popup minWidth={180}>
+                    <div style={{ fontFamily: "'Poppins', sans-serif" }}>
+                      <div className="font-bold text-sm mb-1">{z.name}</div>
+                      <div className="text-[10px] text-slate-500">
+                        <div>Radius: {Math.round(z.radius_m)}m</div>
+                        {z.assigned_team_ids?.length > 0 && <div>Teams: {z.assigned_team_ids.length}</div>}
+                      </div>
+                    </div>
+                  </Popup>
+                </Circle>
+              ))}
 
               {/* Zone polygons — points sorted to prevent crossing lines */}
               {routes.filter(r => r.isZone).map(zone => {
@@ -5414,6 +5687,21 @@ export default function DODMap() {
               ))}
             </div>
 
+            {/* Circle Zone mode banner */}
+            {circleMode && (
+              <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[1000] bg-slate-900/95 border border-pink-500/40 rounded-lg px-3 py-2 text-white text-[11px] md:text-xs font-semibold flex items-center gap-2 shadow-lg">
+                <FiHexagon size={14} color="#ec4899" />
+                <span style={{ color: "#ec4899" }}>
+                  {circleRadius > 0
+                    ? `Drawing zone — ${Math.round(circleRadius)}m radius`
+                    : "Hold and drag to draw zone perimeter"}
+                </span>
+                <button onClick={handleCircleMode} className="px-2 py-0.5 bg-white/10 rounded text-[10px] hover:bg-white/20 transition-colors ml-1">
+                  Cancel
+                </button>
+              </div>
+            )}
+
             {/* Mode indicators */}
             {(routeDrawMode || zoneMode) && (
               <div className="absolute top-14 left-1/2 -translate-x-1/2 z-[1000] bg-slate-900/95 border border-white/10 rounded-lg px-3 py-2 text-white text-[11px] md:text-xs font-semibold flex items-center gap-2 shadow-lg animate-fadeIn flex-wrap">
@@ -5558,6 +5846,8 @@ export default function DODMap() {
               onPOITypeChange={setSelectedPOIType}
               onZoneMode={handleZoneMode}
               zoneMode={zoneMode}
+              onCircleMode={handleCircleMode}
+              circleMode={circleMode}
             />
             <CommsPanel
               messages={messages}
@@ -5652,6 +5942,16 @@ export default function DODMap() {
 
       {showAllEvents && (
         <AllEventsModal onClose={() => setShowAllEvents(false)} usersInfoRef={usersInfoRef} />
+      )}
+
+      {showCircleModal && circleCenter && circleRadius > 0 && (
+        <CircleZoneModal
+          center={circleCenter}
+          radius={circleRadius}
+          dbTeams={dbTeams}
+          onSave={handleSaveCircleZone}
+          onCancel={() => { setShowCircleModal(false); setCircleCenter(null); setCircleRadius(0); setCircleMode(false); }}
+        />
       )}
 
       <FilterModal

@@ -60,9 +60,23 @@ async def init_db():
     async with engine.begin() as conn:
         # Create all tables
         await conn.run_sync(Base.metadata.create_all)
-        
+
         # Create extensions if they don't exist
         await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
-        # await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "postgis"'))  # Optional
-    
-    print("Database tables created successfully")
+
+        # Add columns that may be missing from existing tables (safe ALTER TABLE)
+        migrations = [
+            # Circle zone support
+            "ALTER TABLE zones ADD COLUMN IF NOT EXISTS center_lat FLOAT",
+            "ALTER TABLE zones ADD COLUMN IF NOT EXISTS center_lng FLOAT",
+            "ALTER TABLE zones ADD COLUMN IF NOT EXISTS radius_m FLOAT",
+            # Location name/team_name fields
+            "ALTER TABLE locations ADD COLUMN IF NOT EXISTS last_update TIMESTAMP WITH TIME ZONE",
+        ]
+        for sql in migrations:
+            try:
+                await conn.execute(text(sql))
+            except Exception:
+                pass  # Column may already exist or table not yet created
+
+    print("Database tables created/migrated successfully")

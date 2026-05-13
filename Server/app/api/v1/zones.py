@@ -12,6 +12,8 @@ from app.models.user import User
 from app.models.zone import Zone, ZoneCoordinate, ZoneAssignment
 from app.models.team import Team
 from app.middleware.auth import get_current_user, require_commander
+from app.websocket.manager import manager
+import asyncio
 
 class ZoneCoordinateCreate(BaseModel):
     latitude: float
@@ -23,9 +25,13 @@ class ZoneCreate(BaseModel):
     zone_type: str = Field(..., min_length=2, max_length=50)
     color: str = "#ec4899"
     description: Optional[str] = None
-    coordinates: List[ZoneCoordinateCreate]
+    coordinates: List[ZoneCoordinateCreate] = []
     assigned_team_ids: List[UUID] = []
     assigned_user_ids: List[UUID] = []
+    # Circle zone fields
+    center_lat: Optional[float] = None
+    center_lng: Optional[float] = None
+    radius_m: Optional[float] = None
 
 class ZoneUpdate(BaseModel):
     name: Optional[str] = None
@@ -55,7 +61,10 @@ class ZoneResponse(BaseModel):
     coordinates: List[ZoneCoordinateResponse] = []
     assigned_team_ids: List[UUID] = []
     assigned_user_ids: List[UUID] = []
-    
+    center_lat: Optional[float] = None
+    center_lng: Optional[float] = None
+    radius_m: Optional[float] = None
+
     class Config:
         from_attributes = True
 
@@ -122,6 +131,9 @@ async def list_zones(
             ],
             assigned_team_ids=[a.team_id for a in assignments if a.team_id],
             assigned_user_ids=[a.user_id for a in assignments if a.user_id],
+            center_lat=zone.center_lat,
+            center_lng=zone.center_lng,
+            radius_m=zone.radius_m,
         ))
     
     return response
@@ -139,6 +151,9 @@ async def create_zone(
         color=data.color,
         description=data.description,
         created_by=current_user.id,
+        center_lat=data.center_lat,
+        center_lng=data.center_lng,
+        radius_m=data.radius_m,
     )
     
     db.add(zone)
@@ -171,7 +186,17 @@ async def create_zone(
     
     await db.commit()
     await db.refresh(zone)
-    
+
+    # Broadcast so connected commanders refresh their maps immediately
+    try:
+        asyncio.create_task(manager.broadcast_event({
+            "event_type": "ZONE",
+            "description": f"Zone created: {zone.name}",
+            "id": str(zone.id),
+        }))
+    except Exception:
+        pass
+
     # Get coordinates for response
     coords_result = await db.execute(
         select(ZoneCoordinate)
@@ -201,7 +226,28 @@ async def create_zone(
         ],
         assigned_team_ids=data.assigned_team_ids,
         assigned_user_ids=data.assigned_user_ids,
+        center_lat=zone.center_lat,
+        center_lng=zone.center_lng,
+        radius_m=zone.radius_m,
     )
+
+@router.delete("/{zone_id}", status_code=status.HTTP_200_OK)
+async def delete_zone(
+    zone_id: UUID,
+    current_user: User = Depends(require_commander),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Zone).where(Zone.id == zone_id))
+    zone = result.scalar_one_or_none()
+    if not zone:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Zone not found")
+    await db.delete(zone)
+    await db.commit()
+    try:
+        asyncio.create_task(manager.broadcast_event({"event_type": "ZONE", "description": "Zone deleted", "id": str(zone_id)}))
+    except Exception:
+        pass
+    return {"message": "Zone deleted"}
 
 @router.get("/{zone_id}", response_model=ZoneResponse)
 async def get_zone(

@@ -86,6 +86,11 @@ class _LiveFeedScreenState extends State<LiveFeedScreen> {
       return;
     }
 
+    // Route audio through the speaker for two-way communication
+    try {
+      await Helper.setSpeakerphoneOn(true);
+    } catch (_) {}
+
     // Connect to signaling server
     final token = await _storage.getToken();
     if (token == null || !mounted) return;
@@ -207,7 +212,24 @@ class _LiveFeedScreenState extends State<LiveFeedScreen> {
     };
 
     pc.onTrack = (event) async {
-      if (event.streams.isEmpty) return;
+      // Route audio through the speaker so commander's voice is audible
+      try {
+        await Helper.setSpeakerphoneOn(true);
+      } catch (_) {}
+
+      final stream = event.streams.isNotEmpty
+          ? event.streams.first
+          : event.track.kind == 'audio'
+              // Audio-only track without a stream — wrap it
+              ? await createLocalMediaStream('commander_audio')
+              : null;
+      if (stream == null) return;
+
+      // Add the track to the stream if it arrived without one
+      if (event.streams.isEmpty) {
+        await stream.addTrack(event.track);
+      }
+
       if (!_remoteRenderers.containsKey(peerId)) {
         final renderer = RTCVideoRenderer();
         await renderer.initialize();
@@ -215,7 +237,7 @@ class _LiveFeedScreenState extends State<LiveFeedScreen> {
       }
       if (mounted) {
         setState(() {
-          _remoteRenderers[peerId]!.srcObject = event.streams.first;
+          _remoteRenderers[peerId]!.srcObject = stream;
         });
       }
     };

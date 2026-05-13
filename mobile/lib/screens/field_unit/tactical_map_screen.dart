@@ -230,6 +230,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   // ── State ───────────────────────────────────────────────────────────────────
   TacMapType _mapType = TacMapType.tactical;
   List<Map<String, dynamic>> _teamLocations = [];
+  List<Map<String, dynamic>> _allLocations = []; // all users visible on map
   List<Map<String, dynamic>> _myRoutes = [];
   List<Map<String, dynamic>> _sharedPois = [];
   List<Map<String, dynamic>> _messages = [];
@@ -243,7 +244,6 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   LatLng? _navDestination;
   Map<String, dynamic>? _activeFollowSession;
   List<LatLng> _activeRouteRoad = [];
-  List<LatLng> _previewRoad = []; // OSRM road preview before follow starts
   // OSRM roads per route id: routeId → road polyline starting from soldier's position
   final Map<String, List<LatLng>> _routeRoads = {};
   LatLng? _lastRoadFetchPos; // track position to know when to re-fetch
@@ -672,7 +672,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     final userId = auth.user?.id;
 
     final results = await Future.wait([
-      _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations').catchError((_) => null),
+      _api.get('/locations').catchError((_) => null),                          // all users
+      _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations').catchError((_) => null), // team only
       _api.get('/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}').catchError((_) => null),
       if (teamId != null) _api.get('/routes?is_active=true&team_id=$teamId').catchError((_) => null),
       _api.get('/pois?status=active').catchError((_) => null),
@@ -681,15 +682,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
     if (!mounted) return;
     final hasTeam = teamId != null;
-    final userRoutes = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    final teamRoutes = hasTeam ? ((results[2] as List?)?.cast<Map<String, dynamic>>() ?? []) : <Map<String, dynamic>>[];
+    final userRoutes = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final teamRoutes = hasTeam ? ((results[3] as List?)?.cast<Map<String, dynamic>>() ?? []) : <Map<String, dynamic>>[];
     final seen = <dynamic>{for (final r in userRoutes) r['id']};
     final mergedRoutes = [...userRoutes, ...teamRoutes.where((r) => seen.add(r['id']))];
-    final poisResult = results[hasTeam ? 3 : 2];
-    final sessionResult = results[hasTeam ? 4 : 3];
+    final poisResult = results[hasTeam ? 4 : 3];
+    final sessionResult = results[hasTeam ? 5 : 4];
 
     setState(() {
-      _teamLocations = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _allLocations  = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _teamLocations = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
       _myRoutes      = mergedRoutes;
       _sharedPois    = (poisResult as List?)?.cast<Map<String, dynamic>>() ?? [];
       final session  = sessionResult;
@@ -1396,28 +1398,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             urlTemplate: tile['overlay'] as String,
             userAgentPackageName: 'com.drd.fieldops',
           ),
-        // Approach preview: only shown when no OSRM road is active yet
-        if (_activeRouteRoad.isEmpty)
-          PolylineLayer(polylines: _buildApproachLines(myPos)),
-        // Route polylines
+        // Route polylines — OSRM roads starting from soldier's position
+        // Trigger fetch/refresh whenever position or routes change
+        Builder(builder: (_) {
+          _fetchAllRouteRoads(myPos);
+          return const SizedBox.shrink();
+        }),
         PolylineLayer(polylines: _buildRouteLines()),
-        // Active route: OSRM road polyline when available, otherwise straight line
-        if (_navDestination != null)
+        // Active route: OSRM road — only shown once road is available (no straight-line fallback)
+        if (_navDestination != null && _activeRouteRoad.length >= 2)
           PolylineLayer(
             polylines: [
-              if (_activeRouteRoad.length >= 2)
-                Polyline(
-                  points: _activeRouteRoad,
-                  color: const Color(0xFF00E5FF),
-                  strokeWidth: 3.5,
-                )
-              else
-                Polyline(
-                  points: [myPos, _navDestination!],
-                  color: const Color(0xFF00E5FF),
-                  strokeWidth: 2.5,
-                  isDotted: true,
-                ),
+              Polyline(
+                points: _activeRouteRoad,
+                color: const Color(0xFF00E5FF),
+                strokeWidth: 3.5,
+              ),
             ],
           ),
         // Nav destination marker
@@ -1429,7 +1425,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         MarkerLayer(markers: _buildSharedPoiMarkers()),
         // Tactical marks
         MarkerLayer(markers: _buildMarkMarkers()),
-        // Team members
+        // Other users (not in same team) — grey markers, no location detail
+        MarkerLayer(markers: _buildAllUserMarkers(myId)),
+        // Team members — blue markers, full detail on tap
         MarkerLayer(markers: _buildTeamMarkers(myId)),
         // Own position
         MarkerLayer(
@@ -1596,7 +1594,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
           final status = l['status'] as String? ?? 'offline';
           final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
-          final name = l['user_name'] as String? ?? '?';
+          final name = (l['name'] ?? l['user_name']) as String? ?? '?';
           final initials = name
               .split(' ')
               .where((w) => w.isNotEmpty)
@@ -1609,7 +1607,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             point: LatLng(lat, lng),
             width: 56,
             height: 72,
-            child: Column(
+            child: GestureDetector(
+              onTap: () => _showUserSummary(l, isSameTeam: true),
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 // Solid blue circle with white initials
@@ -1664,11 +1664,160 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 ),
               ],
             ),
+            ),  // GestureDetector
           );
         })
         .whereType<Marker>()
         .toList();
   }
+
+  /// Markers for users outside the soldier's own team — grey, no location detail on tap.
+  List<Marker> _buildAllUserMarkers(String? myId) {
+    final myTeamIds = Set<String>.from(_teamLocations.map((l) => l['user_id'] as String? ?? ''));
+    return _allLocations
+        .where((l) {
+          final uid = l['user_id'] as String? ?? '';
+          return uid != myId && !myTeamIds.contains(uid);
+        })
+        .map((l) {
+          final lat = (l['latitude'] as num?)?.toDouble();
+          final lng = (l['longitude'] as num?)?.toDouble();
+          if (lat == null || lng == null) return null;
+          final name = (l['name'] ?? l['user_name']) as String? ?? '?';
+          final initials = name.split(' ').where((w) => w.isNotEmpty).take(2).map((w) => w[0].toUpperCase()).join();
+          final status = l['status'] as String? ?? 'offline';
+          final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
+          return Marker(
+            point: LatLng(lat, lng),
+            width: 50,
+            height: 62,
+            child: GestureDetector(
+              onTap: () => _showUserSummary(l, isSameTeam: false),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: const Color(0xFF475569),
+                      border: Border.all(color: statusColor, width: 2),
+                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4)],
+                    ),
+                    child: Center(child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))),
+                  ),
+                  const SizedBox(height: 2),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.65), borderRadius: BorderRadius.circular(3)),
+                    child: Text(name.split(' ').first, style: const TextStyle(color: Colors.white60, fontSize: 7, fontWeight: FontWeight.w600)),
+                  ),
+                ],
+              ),
+            ),
+          );
+        })
+        .whereType<Marker>()
+        .toList();
+  }
+
+  void _showUserSummary(Map<String, dynamic> loc, {required bool isSameTeam}) {
+    final name   = (loc['name'] ?? loc['user_name']) as String? ?? 'Unknown';
+    final team   = loc['team_name'] as String? ?? '—';
+    final status = loc['status'] as String? ?? 'offline';
+    final lat    = (loc['latitude']  as num?)?.toDouble();
+    final lng    = (loc['longitude'] as num?)?.toDouble();
+    final speed  = (loc['speed']     as num?)?.toDouble() ?? 0.0;
+    final hdg    = (loc['heading']   as num?)?.toDouble() ?? 0.0;
+    final batt   = loc['battery_level'] as int?;
+    final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: DRDTheme.surfaceColor,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      builder: (_) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Handle
+            Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)))),
+            const SizedBox(height: 14),
+            // Header row
+            Row(children: [
+              Container(
+                width: 44, height: 44,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: isSameTeam ? DRDTheme.primaryColor.withValues(alpha: 0.15) : const Color(0xFF475569).withValues(alpha: 0.3),
+                  border: Border.all(color: statusColor, width: 2.5),
+                ),
+                child: Center(child: Text(
+                  name.split(' ').where((w) => w.isNotEmpty).take(2).map((w) => w[0].toUpperCase()).join(),
+                  style: TextStyle(color: isSameTeam ? DRDTheme.primaryColor : Colors.white70, fontSize: 14, fontWeight: FontWeight.bold),
+                )),
+              ),
+              const SizedBox(width: 12),
+              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Text(name, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 3),
+                Row(children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                    decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(4)),
+                    child: Text(status.toUpperCase(), style: TextStyle(color: statusColor, fontSize: 9, fontWeight: FontWeight.bold)),
+                  ),
+                  const SizedBox(width: 6),
+                  Text(team, style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                ]),
+              ])),
+              if (!isSameTeam)
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.white12)),
+                  child: const Text('Other team', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.w600)),
+                ),
+            ]),
+            const SizedBox(height: 14),
+            const Divider(color: Colors.white12, height: 1),
+            const SizedBox(height: 12),
+            // Stats — location only visible for same-team
+            Wrap(spacing: 16, runSpacing: 8, children: [
+              if (isSameTeam && lat != null)
+                _summaryChip(Icons.location_on_outlined, '${lat.toStringAsFixed(5)}, ${lng?.toStringAsFixed(5) ?? "—"}'),
+              if (isSameTeam)
+                _summaryChip(Icons.speed_outlined, '${speed.toStringAsFixed(1)} km/h'),
+              if (isSameTeam)
+                _summaryChip(Icons.explore_outlined, 'HDG ${hdg.toStringAsFixed(0)}°'),
+              if (batt != null && isSameTeam)
+                _summaryChip(Icons.battery_std_outlined, '$batt%'),
+              if (!isSameTeam)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Row(children: [
+                    Icon(Icons.lock_outline, size: 13, color: Colors.white38),
+                    SizedBox(width: 5),
+                    Text('Location details restricted to team members', style: TextStyle(color: Colors.white38, fontSize: 10)),
+                  ]),
+                ),
+            ]),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _summaryChip(IconData icon, String text) => Row(
+    mainAxisSize: MainAxisSize.min,
+    children: [
+      Icon(icon, size: 12, color: Colors.white38),
+      const SizedBox(width: 4),
+      Text(text, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+    ],
+  );
 
   static const _enemyTypeIds = {'enemy_contact', 'enemy_vehicle', 'ied_suspected'};
 
@@ -1935,64 +2084,45 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     _showSnack('Mark deleted', color: DRDTheme.successColor);
   }
 
+  /// Fetch OSRM roads for every assigned route, starting from the soldier's
+  /// current GPS position. Re-fetches when position drifts > 150 m.
+  Future<void> _fetchAllRouteRoads(LatLng myPos) async {
+    // Only re-fetch when we've moved significantly or have new routes
+    if (_lastRoadFetchPos != null) {
+      final d = _distanceKm(myPos.latitude, myPos.longitude,
+          _lastRoadFetchPos!.latitude, _lastRoadFetchPos!.longitude);
+      if (d != null && d < 0.15 && _routeRoads.length == _myRoutes.length) return;
+    }
+    _lastRoadFetchPos = myPos;
+
+    for (final route in _myRoutes) {
+      final id = route['id'] as String? ?? '';
+      final wps = (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      if (wps.isEmpty) continue;
+      final allPoints = [
+        {'latitude': myPos.latitude, 'longitude': myPos.longitude},
+        ...wps,
+      ];
+      final road = await _fetchOsrmRoute(allPoints);
+      if (mounted) setState(() => _routeRoads[id] = road);
+    }
+  }
+
   List<Polyline> _buildRouteLines() {
     final polylines = <Polyline>[];
     for (final route in _myRoutes) {
-      final wps = route['waypoints'] as List?;
-      if (wps == null || wps.length < 2) continue;
+      final id = route['id'] as String? ?? '';
       final color = _colorFromHex(route['color']);
-      polylines.add(
-        Polyline(
-          points: wps
-              .map(
-                (wp) => LatLng(
-                  (wp['latitude'] as num).toDouble(),
-                  (wp['longitude'] as num).toDouble(),
-                ),
-              )
-              .toList(),
-          color: color,
-          strokeWidth: 3.5,
-        ),
-      );
+      final road = _routeRoads[id];
+      if (road != null && road.length >= 2) {
+        // Real road from OSRM — no straight lines
+        polylines.add(Polyline(points: road, color: color, strokeWidth: 3.5));
+      }
+      // While OSRM is loading, show nothing (no straight-line fallback)
     }
     return polylines;
   }
 
-  /// Approach from current GPS position to the selected route.
-  /// Uses the OSRM-fetched road preview when available, straight dashed line while loading.
-  List<Polyline> _buildApproachLines(LatLng myPos) {
-    // If we have the OSRM preview road, use it (actual road, not straight line)
-    if (_previewRoad.length >= 2) {
-      return [
-        Polyline(
-          points: _previewRoad,
-          color: Colors.amberAccent.withValues(alpha: 0.85),
-          strokeWidth: 2.5,
-          isDotted: true,
-        ),
-      ];
-    }
-    // Fallback: straight dashed line while OSRM is loading
-    final lines = <Polyline>[];
-    for (final route in _myRoutes) {
-      final wps = route['waypoints'] as List?;
-      if (wps == null || wps.isEmpty) continue;
-      final first = wps.first as Map<String, dynamic>;
-      final lat = (first['latitude'] as num?)?.toDouble();
-      final lng = (first['longitude'] as num?)?.toDouble();
-      if (lat == null || lng == null) continue;
-      final dist = _distanceKm(myPos.latitude, myPos.longitude, lat, lng);
-      if (dist != null && dist < 0.02) continue;
-      lines.add(Polyline(
-        points: [myPos, LatLng(lat, lng)],
-        color: Colors.amberAccent.withValues(alpha: 0.5),
-        strokeWidth: 2,
-        isDotted: true,
-      ));
-    }
-    return lines;
-  }
 
   List<Marker> _buildWaypointMarkers() {
     final markers = <Marker>[];
@@ -2098,16 +2228,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Future<List<LatLng>> _fetchOsrmRoute(
     List<Map<String, dynamic>> waypoints,
   ) async {
-    if (waypoints.length < 2) {
-      return waypoints
-          .map(
-            (wp) => LatLng(
-              (wp['latitude'] as num).toDouble(),
-              (wp['longitude'] as num).toDouble(),
-            ),
-          )
-          .toList();
-    }
+    if (waypoints.length < 2) return [];
 
     // OSRM expects coordinates as "lng,lat;lng,lat;..."
     final coords = waypoints
@@ -2141,18 +2262,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         }
       }
     } catch (_) {
-      // Network error or timeout — fall through to straight-line fallback
+      // OSRM failed — return empty so nothing is drawn (no straight-line fallback)
     }
 
-    // Fallback: straight lines between waypoints
-    return waypoints
-        .map(
-          (wp) => LatLng(
-            (wp['latitude'] as num).toDouble(),
-            (wp['longitude'] as num).toDouble(),
-          ),
-        )
-        .toList();
+    return [];
   }
 
   Future<void> _startFollowRoute(Map<String, dynamic> route) async {
@@ -2190,7 +2303,6 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _navDestination = target;
       _activeFollowSession = session as Map<String, dynamic>?;
       _activeRouteRoad = roadPoints;
-      _previewRoad = []; // OSRM road takes over
       _panelOpen = false;
       // Reset checkpoint tracking
       _currentWaypointIndex = 0;
@@ -2215,8 +2327,6 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         _activeFollowSession = null;
         _activeNavRoute = null;
         _navDestination = null;
-        _previewRoad = [];
-        _activeRouteRoad = [];
         _activeRouteRoad = [];
         _currentWaypointIndex = 0;
         _routePaused = false;
@@ -2236,16 +2346,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     final target = _routeTarget(route);
     final routeName = route['name'] as String? ?? 'Route';
 
-    // Fetch OSRM preview from current position → first waypoint → … → destination
+    // Trigger OSRM road fetch from current position for all routes
     final loc = context.read<LocationProvider>();
-    if (loc.hasRealFix && waypoints.isNotEmpty) {
-      final waypointsWithStart = [
-        {'latitude': loc.latitude, 'longitude': loc.longitude},
-        ...waypoints,
-      ];
-      _fetchOsrmRoute(waypointsWithStart).then((road) {
-        if (mounted) setState(() => _previewRoad = road);
-      });
+    if (loc.hasRealFix) {
+      _fetchAllRouteRoads(LatLng(loc.latitude, loc.longitude));
     }
     final routeStatus =
         (route['route_status'] as String? ??

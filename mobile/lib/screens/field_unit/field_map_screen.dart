@@ -534,7 +534,7 @@ class _FieldMapScreenState extends State<FieldMapScreen>
         .map((loc) {
           final statusColor =
               DRDTheme.statusColors[loc['status'] as String?] ?? Colors.grey;
-          final rawName = loc['user_name'] as String? ?? '?';
+          final rawName = (loc['name'] ?? loc['user_name']) as String? ?? '?';
           final initials = rawName
               .split(' ')
               .where((w) => w.isNotEmpty)
@@ -958,7 +958,7 @@ class _FieldMapScreenState extends State<FieldMapScreen>
           Text(
             nearest == null
                 ? 'Nearest teammate: unavailable'
-                : 'Nearest teammate: ${nearest['user_name'] ?? 'Unknown'} · ${_formatDistance(nearest['distance_km'] as double?)}',
+                : 'Nearest teammate: ${nearest['name'] ?? nearest['user_name'] ?? 'Unknown'} · ${_formatDistance(nearest['distance_km'] as double?)}',
             style: const TextStyle(color: Colors.white70, fontSize: 10),
           ),
         ],

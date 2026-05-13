@@ -15,6 +15,10 @@ class Zone(Base):
     description = Column(String(500))
     created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     is_active = Column(Boolean, default=True)
+    # Circle zone fields (null = polygon zone)
+    center_lat = Column(Float, nullable=True)
+    center_lng = Column(Float, nullable=True)
+    radius_m = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
     
