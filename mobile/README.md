@@ -1,17 +1,71 @@
-# mobile
+# DRD Tracking Mobile App
 
-A new Flutter project.
+This folder contains the Flutter mobile application for the DRD Tracking System.
+
+The mobile app supports live location tracking, mapping, event monitoring, offline data caching, push notifications, and camera/media workflows.
+
+## Technologies
+
+- Flutter / Dart
+- Provider state management
+- flutter_map and latlong2
+- geolocator / geocoding
+- web_socket_channel
+- connectivity_plus / battery_plus
+- flutter_webrtc
+- shared_preferences / sqflite
 
 ## Getting Started
 
-This project is a starting point for a Flutter application.
+Install dependencies:
 
-A few resources to get you started if this is your first Flutter project:
+```bash
+cd mobile
+flutter pub get
+```
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Run on a connected device or emulator:
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+```bash
+cd mobile
+flutter run
+```
+
+Build a debug APK for local testing:
+
+```bash
+cd mobile
+./build_debug_dev.sh
+```
+
+Build a production release APK:
+
+```bash
+cd mobile
+./build_release_prod.sh
+```
+
+## Environment
+
+The mobile app supports environment flavors and custom API host configuration using Dart defines.
+
+Example:
+
+```bash
+flutter run --dart-define=FLAVOR=development
+flutter run --dart-define=FLAVOR=production
+```
+
+## Folder structure
+
+- `lib/` - main application code
+- `lib/models/` - data models
+- `lib/providers/` - app state providers
+- `lib/screens/` - app screens
+- `lib/services/` - network, connectivity, and backend integration
+- `lib/widgets/` - reusable UI components
+- `assets/` - fonts, images, and map assets
+
+## Notes
+
+See the root `README.md` for repository-level setup instructions and server integration.
