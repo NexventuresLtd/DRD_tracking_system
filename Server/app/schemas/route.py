@@ -52,6 +52,7 @@ class RouteResponse(BaseModel):
     assigned_user_id: Optional[UUID]
     color: str
     is_active: bool
+    proposed_status: str = "approved"
     is_zone: bool
     zone_type: Optional[str]
     meeting_point: bool

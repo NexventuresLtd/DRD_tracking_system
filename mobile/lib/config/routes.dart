@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../screens/splash_screen.dart';
 import '../screens/login_screen.dart';
+import '../screens/register_screen.dart';
 import '../screens/commander/commander_home.dart';
 import '../screens/commander/team_management.dart';
 import '../screens/commander/route_planning.dart';
@@ -14,6 +15,8 @@ import '../screens/field_unit/navigation.dart';
 import '../screens/field_unit/check_in.dart';
 import '../screens/field_unit/sos_screen.dart';
 import '../screens/viewer/viewer_home.dart';
+import '../screens/join_network_screen.dart';
+import '../screens/settings_screen.dart';
 
 class AppRoutes {
   static Route<dynamic> generateRoute(RouteSettings settings) {
@@ -22,6 +25,17 @@ class AppRoutes {
         return _buildRoute(settings, const SplashScreen());
       case '/login':
         return _buildRoute(settings, const LoginScreen());
+      case '/register':
+        final args = settings.arguments as Map<String, dynamic>? ?? {};
+        return _buildRoute(
+          settings,
+          RegisterScreen(
+            inviteToken: args['inviteToken'] as String?,
+            teamName: args['teamName'] as String?,
+            role: args['role'] as String?,
+            serverUrl: args['serverUrl'] as String?,
+          ),
+        );
       case '/commander/home':
         return _buildRoute(settings, const CommanderHome());
       case '/commander/teams':
@@ -48,6 +62,10 @@ class AppRoutes {
         return _buildRoute(settings, const SOSScreen());
       case '/viewer/home':
         return _buildRoute(settings, const ViewerHome());
+      case '/join-network':
+        return _buildRoute(settings, const JoinNetworkScreen());
+      case '/settings':
+        return _buildRoute(settings, const SettingsScreen());
       default:
         return _buildRoute(settings, const SplashScreen());
     }

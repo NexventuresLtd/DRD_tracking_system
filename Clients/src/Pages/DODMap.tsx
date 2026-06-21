@@ -99,6 +99,7 @@ interface User {
   flagTime?: Date | null;
   currentRoute?: string;
   role?: "lead" | "medic" | "scout" | "support" | "sniper";
+  profile_picture_url?: string;
 }
 
 interface Event {
@@ -114,6 +115,7 @@ interface Event {
 interface Message {
   id: string;
   from: string;
+  fromId: string;
   to: string;
   content: string;
   time: Date;
@@ -162,6 +164,7 @@ interface UserRecord {
   teamId?: string;
   teamName?: string;
   teamRole?: string;
+  profile_picture_url?: string;
 }
 
 interface SOSIncident {
@@ -1632,8 +1635,6 @@ function QuickActionsPanel({
   routeDrawMode,
   poiType,
   onPOITypeChange,
-  onZoneMode,
-  zoneMode,
   onCircleMode,
   circleMode,
 }: {
@@ -1648,8 +1649,6 @@ function QuickActionsPanel({
   routeDrawMode: boolean;
   poiType: POIType;
   onPOITypeChange: (type: POIType) => void;
-  onZoneMode: () => void;
-  zoneMode: boolean;
   onCircleMode: () => void;
   circleMode: boolean;
 }) {
@@ -1794,284 +1793,351 @@ function EventsLog({ events, onViewAll }: { events: Event[]; onViewAll: () => vo
   );
 }
 
-function MessageModal({
-  toUserId,
-  users,
-  messages,
-  onSend,
-  onClose,
-}: {
-  toUserId: string | null;
-  users: User[];
-  messages: Message[];
-  onSend: (to: string, content: string, priority: "low" | "normal" | "high" | "urgent") => void;
-  onClose: () => void;
-}) {
-  const [text, setText] = useState("");
-  const [to, setTo] = useState(toUserId || "ALL");
-  const [priority, setPriority] = useState<"low" | "normal" | "high" | "urgent">("normal");
-  const relevant = messages.filter(m => m.to === to || m.from === to || m.to === "ALL").slice(-30);
+// ── WhatsApp-style COMMS Modal ───────────────────────────────────────────────
 
-  const priorityColors = {
-    low: "text-slate-400",
-    normal: "text-foreground",
-    high: "text-yellow-500",
-    urgent: "text-red-500",
-  };
+const PRIO = {
+  low:    { color: "#64748b", label: "LOW",    bg: "rgba(100,116,139,0.12)" },
+  normal: { color: "#94a3b8", label: "",        bg: "" },
+  high:   { color: "#f59e0b", label: "HIGH",   bg: "rgba(245,158,11,0.08)" },
+  urgent: { color: "#ef4444", label: "URGENT", bg: "rgba(239,68,68,0.10)" },
+};
 
+function Avatar({ name, url, size = 32, color }: { name: string; url?: string; size?: number; color?: string }) {
+  const initials = name.split(" ").filter(Boolean).map(w => w[0]).join("").slice(0, 2).toUpperCase() || "??";
+  const bg = color ?? "#3b82f6";
+  if (url) {
+    return (
+      <img src={url} alt={name} className="rounded-full object-cover flex-shrink-0"
+        style={{ width: size, height: size, border: `1.5px solid ${bg}40` }}
+        onError={e => { (e.target as HTMLImageElement).style.display = "none"; }} />
+    );
+  }
   return (
-    <div className="fixed inset-0 bg-black/70 z-[5000] flex items-center justify-center p-4" onClick={onClose}>
-      <div
-        className="bg-slate-900 border border-white/10 rounded-xl w-full max-w-[460px] max-h-[80vh] flex flex-col shadow-2xl animate-fadeIn"
-        onClick={e => e.stopPropagation()}
-      >
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-white/10">
-          <FiMessageSquare color="#3b82f6" size={15} />
-          <span className="text-foreground font-bold text-sm flex-1 truncate">
-            {to === "ALL" ? "Broadcast" : users.find(u => u.user_id === to)?.name || to}
-          </span>
-          <button onClick={onClose} className="bg-transparent border-none text-slate-500 hover:text-foreground cursor-pointer text-lg">
-            <FiX />
-          </button>
-        </div>
-
-        <div className="px-4 py-2.5 border-b border-white/5 flex gap-2">
-          <select
-            value={to}
-            onChange={e => setTo(e.target.value)}
-            className="flex-1 bg-slate-800 border border-white/10 rounded-md px-2.5 py-1.5 text-foreground text-xs"
-          >
-            <option value="ALL">All Users (Broadcast)</option>
-            {users.map(u => (
-              <option key={u.user_id} value={u.user_id}>{u.name} — {u.group}</option>
-            ))}
-          </select>
-          <select
-            value={priority}
-            onChange={e => setPriority(e.target.value as any)}
-            className="w-20 bg-slate-800 border border-white/10 rounded-md px-1.5 py-1.5 text-xs"
-            style={{ color: priorityColors[priority] ? undefined : "#94a3b8" }}
-          >
-            <option value="low">Low</option>
-            <option value="normal">Normal</option>
-            <option value="high">High</option>
-            <option value="urgent">Urgent</option>
-          </select>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 flex flex-col gap-2.5 min-h-[200px] max-h-[350px] custom-scrollbar">
-          {relevant.length === 0 ? (
-            <div className="text-slate-500 text-xs text-center mt-10">No messages</div>
-          ) : relevant.map(m => {
-            const isMine = m.from === "COMMANDER";
-            const senderName = isMine ? "You" : (users.find(u => u.user_id === m.from || u.name === m.from)?.name ?? m.from);
-            const initials = senderName.split(" ").map((w: string) => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
-            return (
-              <div key={m.id} className="flex items-end gap-1.5" style={{ flexDirection: isMine ? "row-reverse" : "row" }}>
-                <div
-                  className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold"
-                  style={{ backgroundColor: isMine ? "rgba(59,130,246,0.2)" : "rgba(100,116,139,0.3)", border: `1.5px solid ${isMine ? "rgba(59,130,246,0.5)" : "rgba(148,163,184,0.3)"}`, color: isMine ? "#60a5fa" : "#94a3b8" }}
-                  title={senderName}
-                >
-                  {initials}
-                </div>
-                <div className="flex flex-col max-w-[82%]" style={{ alignItems: isMine ? "flex-end" : "flex-start" }}>
-                  <div className="text-[9px] text-slate-500 mb-0.5 flex items-center gap-1">
-                    <span className="font-medium" style={{ color: isMine ? "#60a5fa" : "#94a3b8" }}>{senderName}</span>
-                    · {formatElapsed(m.time)}
-                    {m.priority && m.priority !== "normal" && (
-                      <span className={`text-[8px] font-bold ${m.priority === "urgent" ? "text-red-500" : m.priority === "high" ? "text-yellow-500" : "text-slate-400"}`}>
-                        {m.priority.toUpperCase()}
-                      </span>
-                    )}
-                  </div>
-                  <div
-                    className="px-3 py-2 rounded-lg text-xs"
-                    style={{
-                      backgroundColor: isMine ? "rgba(59,130,246,0.2)" : "rgba(51,65,85,0.6)",
-                      border: `1px solid ${isMine ? "rgba(59,130,246,0.4)" : "rgba(255,255,255,0.08)"}`,
-                      color: "#e2e8f0",
-                    }}
-                  >
-                    {m.content}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="p-3 border-t border-white/10 flex gap-2">
-          <input
-            value={text}
-            onChange={e => setText(e.target.value)}
-            onKeyDown={e => { if (e.key === "Enter" && text.trim()) { onSend(to, text.trim(), priority); setText(""); } }}
-            placeholder="Type message..."
-            className="flex-1 bg-slate-800 border border-white/10 rounded-md px-3 py-2 text-foreground text-xs"
-          />
-          <button
-            onClick={() => { if (text.trim()) { onSend(to, text.trim(), priority); setText(""); } }}
-            className="bg-primary border-none rounded-md px-3 py-2 text-white cursor-pointer flex items-center gap-1.5 text-xs font-semibold hover:opacity-90"
-          >
-            <FiSend size={12} /> Send
-          </button>
-        </div>
-      </div>
+    <div className="rounded-full flex items-center justify-center flex-shrink-0 font-bold"
+      style={{ width: size, height: size, backgroundColor: `${bg}22`, border: `1.5px solid ${bg}44`, color: bg, fontSize: size * 0.32 }}>
+      {initials}
     </div>
   );
 }
 
-function CommsPanel({
-  messages,
-  users,
-  expanded,
-  onToggle,
-  onSend,
+type ConvKind = "all" | "team" | "user";
+interface Conv { id: string; kind: ConvKind; name: string; color?: string; avatarUrl?: string; }
+
+function CommsModal({
+  messages, users, dbTeams, currentUserId, currentUserName,
+  onSend, onClose, initialConvId,
 }: {
   messages: Message[];
   users: User[];
-  expanded: boolean;
-  onToggle: () => void;
+  dbTeams: TeamInfo[];
+  currentUserId: string;
+  currentUserName: string;
   onSend: (to: string, content: string, priority: "low" | "normal" | "high" | "urgent") => void;
+  onClose: () => void;
+  initialConvId?: string | null;
 }) {
+  const [activeId, setActiveId] = useState<string>(initialConvId ?? "ALL");
   const [text, setText] = useState("");
-  const [to, setTo] = useState("ALL");
   const [priority, setPriority] = useState<"low" | "normal" | "high" | "urgent">("normal");
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const unread = messages.filter(m => !m.read).length;
+  const [search, setSearch] = useState("");
+  const [sending, setSending] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Build conversation list
+  const convs: Conv[] = useMemo(() => {
+    const list: Conv[] = [
+      { id: "ALL", kind: "all", name: "ALL UNITS", color: "#22c55e" },
+      ...dbTeams.map(t => ({ id: t.id, kind: "team" as ConvKind, name: t.name, color: t.color })),
+      ...users.filter(u => u.user_id !== currentUserId).map(u => ({
+        id: u.user_id, kind: "user" as ConvKind, name: u.name, color: "#3b82f6",
+        avatarUrl: u.profile_picture_url,
+      })),
+    ];
+    return list;
+  }, [dbTeams, users, currentUserId]);
+
+  // Last message + unread per conversation
+  const convMeta = useMemo(() => {
+    const meta = new Map<string, { last?: Message; unread: number }>();
+    convs.forEach(c => meta.set(c.id, { unread: 0 }));
+    const sorted = [...messages].sort((a, b) => a.time.getTime() - b.time.getTime());
+    for (const m of sorted) {
+      const isMine = m.fromId === currentUserId || m.fromId === "me";
+      let key: string;
+      if (m.to === "ALL") key = "ALL";
+      else if (isMine) key = m.to;
+      else key = m.fromId;
+
+      if (!meta.has(key)) meta.set(key, { unread: 0 });
+      const entry = meta.get(key)!;
+      entry.last = m;
+      if (!isMine && !m.read && key !== activeId) entry.unread++;
+    }
+    return meta;
+  }, [messages, convs, currentUserId, activeId]);
+
+  // Messages for active conversation
+  const activeConv = convs.find(c => c.id === activeId);
+  const activeMessages = useMemo(() => {
+    const sorted = [...messages].sort((a, b) => a.time.getTime() - b.time.getTime());
+    if (activeId === "ALL") {
+      return sorted.filter(m =>
+        m.to === "ALL" ||
+        m.fromId === currentUserId ||
+        m.to === currentUserId
+      );
+    }
+    if (activeConv?.kind === "team") return sorted.filter(m => m.to === activeId);
+    // Individual DM — show all messages from that person OR sent by me to that person
+    return sorted.filter(m =>
+      m.fromId === activeId ||
+      (m.fromId === currentUserId && m.to === activeId)
+    );
+  }, [messages, activeId, activeConv, currentUserId]);
 
   useEffect(() => {
-    if (expanded && messagesEndRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [messages, expanded]);
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeMessages.length, activeId]);
 
-  const handleSend = () => {
-    if (!text.trim()) return;
-    onSend(to, text.trim(), priority);
+  useEffect(() => {
+    setTimeout(() => inputRef.current?.focus(), 80);
+  }, [activeId]);
+
+  const send = () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    onSend(activeId, text.trim(), priority);
     setText("");
+    setTimeout(() => setSending(false), 400);
   };
 
-  const priorityColors: Record<string, string> = {
-    low: "#94a3b8",
-    normal: "#e2e8f0",
-    high: "#f59e0b",
-    urgent: "#ef4444",
+  const filteredConvs = search
+    ? convs.filter(c => c.name.toLowerCase().includes(search.toLowerCase()))
+    : convs;
+
+  const sectionedConvs = {
+    all: filteredConvs.filter(c => c.kind === "all"),
+    teams: filteredConvs.filter(c => c.kind === "team"),
+    users: filteredConvs.filter(c => c.kind === "user"),
+  };
+
+  const prio = PRIO[priority];
+
+  const ConvItem = ({ c }: { c: Conv }) => {
+    const meta = convMeta.get(c.id);
+    const last = meta?.last;
+    const unread = meta?.unread ?? 0;
+    const isActive = c.id === activeId;
+    const lastText = last ? (last.fromId === currentUserId ? `You: ${last.content}` : last.content) : "No messages yet";
+    const lastTime = last ? formatElapsed(last.time) : "";
+    const icon = c.kind === "all" ? "📡" : c.kind === "team" ? "👥" : null;
+    return (
+      <button onClick={() => setActiveId(c.id)}
+        className="w-full flex items-center gap-3 px-4 py-3 text-left transition-all hover:bg-white/5 border-none cursor-pointer"
+        style={{ backgroundColor: isActive ? "rgba(59,130,246,0.1)" : "transparent", borderLeft: isActive ? "2px solid #3b82f6" : "2px solid transparent" }}>
+        <div className="relative flex-shrink-0">
+          {icon ? (
+            <div className="w-9 h-9 rounded-full flex items-center justify-center text-base"
+              style={{ backgroundColor: `${c.color ?? "#3b82f6"}18`, border: `1.5px solid ${c.color ?? "#3b82f6"}44` }}>
+              {icon}
+            </div>
+          ) : (
+            <Avatar name={c.name} url={c.avatarUrl} size={36} color={c.color} />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between mb-0.5">
+            <span className="text-xs font-semibold truncate" style={{ color: isActive ? "#e2e8f0" : "#94a3b8" }}>{c.name}</span>
+            <span className="text-[9px] text-slate-600 flex-shrink-0 ml-2">{lastTime}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-600 truncate">{lastText.slice(0, 40)}{lastText.length > 40 ? "…" : ""}</span>
+            {unread > 0 && (
+              <span className="flex-shrink-0 ml-1 min-w-[16px] h-4 rounded-full flex items-center justify-center text-[8px] font-bold px-1"
+                style={{ backgroundColor: "#22c55e", color: "white" }}>{unread > 9 ? "9+" : unread}</span>
+            )}
+          </div>
+        </div>
+      </button>
+    );
   };
 
   return (
-    <div className="bg-slate-900/95 border border-white/10 rounded-lg overflow-hidden">
-      <PanelHeader
-        title="COMMS"
-        icon={<FiMessageSquare size={13} />}
-        expanded={expanded}
-        onToggle={onToggle}
-        badge={unread}
-      />
-      {expanded && (
-        <div className="flex flex-col" style={{ maxHeight: 340 }}>
-          {/* Recipient + priority selectors */}
-          <div className="flex gap-1.5 p-2 border-b border-white/5">
-            <select
-              value={to}
-              onChange={e => setTo(e.target.value)}
-              className="flex-1 bg-slate-800 border border-white/10 rounded px-2 py-1 text-foreground text-[10px] min-w-0"
-            >
-              <option value="ALL">Broadcast — All</option>
-              {users.map(u => (
-                <option key={u.user_id} value={u.user_id}>{u.name}</option>
-              ))}
-            </select>
-            <select
-              value={priority}
-              onChange={e => setPriority(e.target.value as "low" | "normal" | "high" | "urgent")}
-              className="w-16 bg-slate-800 border border-white/10 rounded px-1 py-1 text-[10px]"
-              style={{ color: priorityColors[priority] }}
-            >
-              <option value="low">Low</option>
-              <option value="normal">Norm</option>
-              <option value="high">High</option>
-              <option value="urgent">URGENT</option>
-            </select>
-          </div>
+    <div className="fixed inset-0 z-[9900] flex items-center justify-center p-4"
+      style={{ backgroundColor: "rgba(0,6,15,0.85)" }} onClick={onClose}>
+      <div className="w-full max-w-4xl flex rounded-2xl overflow-hidden shadow-2xl"
+        style={{ height: "min(88vh,680px)", backgroundColor: "#050d1a", border: "1px solid rgba(59,130,246,0.18)" }}
+        onClick={e => e.stopPropagation()}>
 
-          {/* Messages list */}
-          <div className="flex-1 overflow-y-auto custom-scrollbar p-2 flex flex-col gap-2 min-h-[120px]">
-            {messages.length === 0 ? (
-              <div className="text-slate-500 text-[10px] text-center mt-4">No messages</div>
-            ) : (
-              messages.slice(-40).map(m => {
-                const isFromCommander = m.from === "COMMANDER";
-                const sender = isFromCommander ? null : users.find(u => u.user_id === m.from || u.name === m.from);
-                const senderName = isFromCommander ? "You" : (sender?.name ?? m.from);
-                const initials = senderName.split(" ").map(w => w[0] ?? "").join("").slice(0, 2).toUpperCase() || "??";
-                const teamColor = sender ? TEAM_COLORS[sender.group]?.primary : "#3b82f6";
-                return (
-                  <div key={m.id} className="flex items-end gap-1.5" style={{ flexDirection: isFromCommander ? "row-reverse" : "row" }}>
-                    {/* Avatar */}
-                    <div
-                      className="w-6 h-6 rounded-full shrink-0 flex items-center justify-center text-[8px] font-bold"
-                      style={{
-                        backgroundColor: isFromCommander ? "rgba(59,130,246,0.2)" : `${teamColor}20`,
-                        border: `1.5px solid ${isFromCommander ? "rgba(59,130,246,0.5)" : `${teamColor}60`}`,
-                        color: isFromCommander ? "#60a5fa" : teamColor,
-                      }}
-                      title={senderName}
-                    >
-                      {initials}
-                    </div>
-                    <div className="flex flex-col max-w-[80%]" style={{ alignItems: isFromCommander ? "flex-end" : "flex-start" }}>
-                      <div className="text-[8px] text-slate-500 mb-0.5 flex items-center gap-1">
-                        <span className="font-medium" style={{ color: isFromCommander ? "#60a5fa" : teamColor }}>{senderName}</span>
-                        <span>·</span>
-                        <span>{formatElapsed(m.time)}</span>
-                        {m.priority && m.priority !== "normal" && (
-                          <span className="font-bold" style={{ color: priorityColors[m.priority] }}>
-                            {m.priority.toUpperCase()}
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        className="px-2.5 py-1.5 rounded-lg text-[11px]"
-                        style={{
-                          backgroundColor: isFromCommander ? "rgba(59,130,246,0.18)" : "rgba(30,41,59,0.7)",
-                          border: `1px solid ${isFromCommander ? "rgba(59,130,246,0.35)" : "rgba(255,255,255,0.07)"}`,
-                          color: "#e2e8f0",
-                        }}
-                      >
-                        {!isFromCommander && (
-                          <span className="text-[8px] font-bold block mb-0.5" style={{ color: m.to === "ALL" ? "#94a3b8" : "#60a5fa" }}>
-                            {m.to === "ALL" ? "→ ALL" : `→ ${users.find(u => u.user_id === m.to)?.name ?? m.to}`}
-                          </span>
-                        )}
-                        {m.content}
-                      </div>
-                    </div>
-                  </div>
-                );
-              })
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Send bar */}
-          <div className="flex gap-1.5 p-2 border-t border-white/5">
-            <input
-              value={text}
-              onChange={e => setText(e.target.value)}
-              onKeyDown={e => { if (e.key === "Enter") handleSend(); }}
-              placeholder="Message units…"
-              className="flex-1 bg-slate-800 border border-white/10 rounded px-2.5 py-1.5 text-foreground text-[11px] min-w-0"
-            />
-            <button
-              onClick={handleSend}
-              className="bg-primary border-none rounded px-2.5 py-1.5 text-white cursor-pointer flex items-center gap-1 text-[10px] font-semibold hover:opacity-90 flex-shrink-0"
-            >
-              <FiSend size={11} />
+        {/* Left: Conversation list */}
+        <div className="w-72 flex-shrink-0 flex flex-col"
+          style={{ borderRight: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(5,13,26,0.95)" }}>
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3.5 flex-shrink-0"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(59,130,246,0.04)" }}>
+            <div className="flex items-center gap-2">
+              <FiMessageSquare size={14} color="#3b82f6" />
+              <span className="text-white font-bold text-[11px] tracking-widest">COMMS</span>
+            </div>
+            <button onClick={onClose}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-slate-500 hover:text-white hover:bg-white/10 transition-all border-none bg-transparent cursor-pointer">
+              <FiX size={13} />
             </button>
           </div>
+          {/* Search */}
+          <div className="px-3 py-2 flex-shrink-0">
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search conversations…"
+              className="w-full bg-slate-800/60 border border-white/8 rounded-lg px-3 py-1.5 text-[11px] text-foreground placeholder-slate-600 focus:outline-none focus:border-blue-500/40" />
+          </div>
+          {/* Conversation list */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar">
+            {sectionedConvs.all.length > 0 && (
+              <>
+                <div className="px-4 pt-3 pb-1 text-[8px] font-bold tracking-widest text-slate-600">BROADCAST</div>
+                {sectionedConvs.all.map(c => <ConvItem key={c.id} c={c} />)}
+              </>
+            )}
+            {sectionedConvs.teams.length > 0 && (
+              <>
+                <div className="px-4 pt-3 pb-1 text-[8px] font-bold tracking-widest text-slate-600">TEAMS</div>
+                {sectionedConvs.teams.map(c => <ConvItem key={c.id} c={c} />)}
+              </>
+            )}
+            {sectionedConvs.users.length > 0 && (
+              <>
+                <div className="px-4 pt-3 pb-1 text-[8px] font-bold tracking-widest text-slate-600">INDIVIDUALS</div>
+                {sectionedConvs.users.map(c => <ConvItem key={c.id} c={c} />)}
+              </>
+            )}
+          </div>
         </div>
-      )}
+
+        {/* Right: Chat view */}
+        <div className="flex-1 flex flex-col min-w-0">
+          {/* Chat header */}
+          <div className="flex items-center gap-3 px-5 py-3.5 flex-shrink-0"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(59,130,246,0.04)" }}>
+            {activeConv ? (
+              <>
+                {activeConv.kind === "all" ? (
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg"
+                    style={{ backgroundColor: "rgba(34,197,94,0.15)", border: "1.5px solid rgba(34,197,94,0.3)" }}>📡</div>
+                ) : activeConv.kind === "team" ? (
+                  <div className="w-9 h-9 rounded-full flex items-center justify-center"
+                    style={{ backgroundColor: `${activeConv.color}18`, border: `1.5px solid ${activeConv.color}44` }}>
+                    <span style={{ color: activeConv.color, fontSize: 14 }}>👥</span>
+                  </div>
+                ) : (
+                  <Avatar name={activeConv.name} url={activeConv.avatarUrl} size={36} color={activeConv.color} />
+                )}
+                <div>
+                  <div className="text-white font-bold text-sm">{activeConv.name}</div>
+                  <div className="text-slate-500 text-[9px] tracking-wide">
+                    {activeConv.kind === "all" ? "Broadcast to all connected units" :
+                      activeConv.kind === "team" ? `${users.filter(u => (u as any).teamId === activeConv.id).length} members` :
+                      (users.find(u => u.user_id === activeConv.id)?.status === "active" ? "🟢 Online" : "⚫ Offline")}
+                  </div>
+                </div>
+              </>
+            ) : <div className="text-slate-500 text-sm">Select a conversation</div>}
+          </div>
+
+          {/* Messages */}
+          <div className="flex-1 overflow-y-auto custom-scrollbar px-5 py-4 flex flex-col gap-1.5">
+            {activeMessages.length === 0 ? (
+              <div className="flex-1 flex flex-col items-center justify-center gap-2 text-center my-auto">
+                <FiMessageSquare size={36} className="text-slate-700" />
+                <div className="text-slate-600 text-[11px] tracking-wide">No messages in this conversation</div>
+                <div className="text-slate-700 text-[10px]">Send the first message below</div>
+              </div>
+            ) : activeMessages.map((m, i) => {
+              const isMine = m.fromId === currentUserId || m.fromId === "me";
+              const senderName = isMine ? "You" : m.from;
+              const prev = i > 0 ? activeMessages[i - 1] : null;
+              const showSender = !prev || prev.fromId !== m.fromId ||
+                (m.time.getTime() - prev.time.getTime()) > 120_000;
+              const mp = PRIO[m.priority ?? "normal"];
+              const peer = isMine ? null : users.find(u => u.user_id === m.fromId);
+              const peerAvatar = peer?.profile_picture_url;
+
+              return (
+                <div key={m.id} className={`flex items-end gap-2 ${isMine ? "flex-row-reverse" : ""}`}>
+                  {/* Avatar */}
+                  <div className="w-7 flex-shrink-0 self-end">
+                    {showSender && (
+                      isMine
+                        ? <Avatar name={currentUserName} size={26} color="#3b82f6" />
+                        : <Avatar name={senderName} url={peerAvatar} size={26} color="#64748b" />
+                    )}
+                  </div>
+                  <div className="flex flex-col max-w-[68%]" style={{ alignItems: isMine ? "flex-end" : "flex-start" }}>
+                    {showSender && (
+                      <div className="flex items-center gap-2 mb-1 px-1">
+                        <span className="text-[9px] font-semibold" style={{ color: isMine ? "#60a5fa" : "#94a3b8" }}>{senderName}</span>
+                        <span className="text-[8px] text-slate-700">{formatElapsed(m.time)}</span>
+                      </div>
+                    )}
+                    <div className="px-3.5 py-2.5 text-[11px] leading-relaxed"
+                      style={{
+                        backgroundColor: isMine ? (mp.bg || "rgba(37,99,235,0.3)") : (mp.bg || "rgba(30,41,59,0.9)"),
+                        border: `1px solid ${isMine ? "rgba(59,130,246,0.3)" : "rgba(255,255,255,0.06)"}`,
+                        color: "#e2e8f0",
+                        borderRadius: isMine ? "14px 14px 3px 14px" : "14px 14px 14px 3px",
+                      }}>
+                      {m.content}
+                      {m.priority && m.priority !== "normal" && (
+                        <div className="mt-1.5 text-[8px] font-bold tracking-widest" style={{ color: mp.color }}>{mp.label}</div>
+                      )}
+                    </div>
+                    {!showSender && (
+                      <div className="text-[8px] text-slate-700 px-1 mt-0.5">{formatElapsed(m.time)}</div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+            <div ref={bottomRef} />
+          </div>
+
+          {/* Input bar */}
+          <div className="flex-shrink-0 px-5 py-3 flex flex-col gap-2"
+            style={{ borderTop: "1px solid rgba(255,255,255,0.07)", backgroundColor: "rgba(5,13,26,0.8)" }}>
+            {/* Priority chips */}
+            <div className="flex gap-1.5">
+              {(["normal", "high", "urgent", "low"] as const).map(p => {
+                const pm = PRIO[p]; const isSelected = priority === p;
+                return (
+                  <button key={p} onClick={() => setPriority(p)}
+                    className="px-2.5 py-1 rounded-full text-[9px] font-bold tracking-wide cursor-pointer transition-all border-none"
+                    style={{
+                      backgroundColor: isSelected ? `${pm.color}22` : "rgba(30,41,59,0.6)",
+                      border: `1px solid ${isSelected ? pm.color + "55" : "rgba(255,255,255,0.06)"}`,
+                      color: isSelected ? pm.color : "#475569",
+                    }}>
+                    {p === "normal" ? "Normal" : p.toUpperCase()}
+                  </button>
+                );
+              })}
+            </div>
+            {/* Text input + send */}
+            <div className="flex gap-2 items-center">
+              <input ref={inputRef} value={text} onChange={e => setText(e.target.value)}
+                onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
+                placeholder={`Message ${activeConv?.name ?? "…"}`}
+                className="flex-1 bg-slate-800/60 border border-white/8 rounded-xl px-4 py-2.5 text-[11px] text-foreground placeholder-slate-600 focus:outline-none focus:border-blue-500/50" />
+              <button onClick={send} disabled={!text.trim() || sending}
+                className="w-9 h-9 flex items-center justify-center rounded-xl border-none cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 flex-shrink-0"
+                style={{ backgroundColor: prio.color !== "#94a3b8" ? prio.color : "#2563eb" }}>
+                {sending
+                  ? <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                  : <FiSend size={14} color="white" />}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -3785,8 +3851,7 @@ function PastLiveSessionsPanel({ visible, onToggle, refreshKey }: { visible: boo
 }
 
 // ─────────────────────────── CIRCLE ZONE MODAL ───────────────────────
-function CircleZoneModal({ center, radius, dbTeams, onSave, onCancel }: {
-  center: [number, number];
+function CircleZoneModal({ radius, dbTeams, onSave, onCancel }: {
   radius: number;
   dbTeams: TeamInfo[];
   onSave: (name: string, zoneType: string, color: string, teamIds: string[]) => void;
@@ -3911,7 +3976,12 @@ export default function DODMap() {
     hasLive: false,
   });
   const [messages, setMessages] = useState<Message[]>([]);
-  const [msgModal, setMsgModal] = useState<string | null>(null);
+  const [showCommsModal, setShowCommsModal] = useState(false);
+  const [commsInitialConvId, setCommsInitialConvId] = useState<string | null>(null);
+  const openComms = useCallback((convId: string) => {
+    setCommsInitialConvId(convId);
+    setShowCommsModal(true);
+  }, []);
   const [sosIncident, setSosIncident] = useState<SOSIncident | null>(null);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [activeFollowSessions, setActiveFollowSessions] = useState<Array<{
@@ -3945,7 +4015,7 @@ export default function DODMap() {
   const [assigningUserId, setAssigningUserId] = useState<string | null>(null);
   const [showAssignPicker, setShowAssignPicker] = useState(false);
   const [currentUserRole, setCurrentUserRole] = useState<any>(null);
-  const [currentUser, setCurrentUser] = useState<{ username?: string; full_name?: string; email?: string; role?: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ id?: string; username?: string; full_name?: string; email?: string; role?: string } | null>(null);
   const [liveFeeds, setLiveFeeds] = useState<LiveFeed[]>([]);
   const [activeFeedIndex, setActiveFeedIndex] = useState(0);
   const [showLiveGrid, setShowLiveGrid] = useState(false);
@@ -4145,7 +4215,7 @@ export default function DODMap() {
         api.listPOIs(),
         api.listRoutes({ is_active: true }),
         api.listRouteHistory(),
-        api.listMessages({ size: 50 }),
+        api.listMessages({ size: 100 }),
         api.listEvents({ size: 50 }),
         api.listUsers({ size: 500 }),
         api.listRouteFollowSessions({ status: "active" }),
@@ -4369,12 +4439,14 @@ export default function DODMap() {
       // Messages
       if (msgsRes.status === "fulfilled") {
         const frontendMsgs: Message[] = (msgsRes.value.data.items as Array<{
-          id: string; from_user_name?: string; to_all: boolean; to_user_id?: string;
+          id: string; from_user_id?: string; from_user_name?: string; to_all: boolean;
+          to_user_id?: string; to_team_id?: string;
           content: string; created_at: string; is_read: boolean; priority?: string;
         }>).map(m => ({
           id: String(m.id),
           from: m.from_user_name ?? "Unknown",
-          to: m.to_all ? "ALL" : (m.to_user_id ? String(m.to_user_id) : "ALL"),
+          fromId: String(m.from_user_id ?? ""),
+          to: m.to_all ? "ALL" : (m.to_user_id ? String(m.to_user_id) : (m.to_team_id ? String(m.to_team_id) : "ALL")),
           content: m.content,
           time: new Date(m.created_at),
           read: m.is_read,
@@ -4451,7 +4523,7 @@ export default function DODMap() {
         }
         const rawUsers = allUsersRes.value.data.items as Array<{
           id: string; username: string; full_name: string; email: string;
-          role: string; is_active: boolean;
+          role: string; is_active: boolean; profile_picture_url?: string;
         }>;
         // Debug: log listUsers payload to help diagnose missing field_unit records
         try {
@@ -4469,6 +4541,7 @@ export default function DODMap() {
           email: u.email,
           role: u.role,
           is_active: u.is_active,
+          profile_picture_url: u.profile_picture_url,
           ...userTeamMap.get(String(u.id)),
         })));
       }
@@ -4596,8 +4669,8 @@ export default function DODMap() {
     const unsubMsg = messageWS.subscribe((msg: unknown) => {
       const m = msg as { type?: string; data?: Record<string, unknown> } & Record<string, unknown>;
       const d = (m.data ?? m) as {
-        id?: string; from_user_name?: string; to_all?: boolean;
-        to_user_id?: string; content?: string; created_at?: string; priority?: string;
+        id?: string; from_user_id?: string; from_user_name?: string; to_all?: boolean;
+        to_user_id?: string; to_team_id?: string; content?: string; created_at?: string; priority?: string;
       };
       if (!d.content) return;
       setMessages(prev => {
@@ -4605,7 +4678,8 @@ export default function DODMap() {
         return [...prev, {
           id: String(d.id ?? Date.now()),
           from: d.from_user_name ?? "Unknown",
-          to: d.to_all ? "ALL" : (d.to_user_id ? String(d.to_user_id) : "ALL"),
+          fromId: String(d.from_user_id ?? ""),
+          to: d.to_all ? "ALL" : (d.to_user_id ? String(d.to_user_id) : (d.to_team_id ? String(d.to_team_id) : "ALL")),
           content: d.content ?? "",
           time: new Date(d.created_at ?? Date.now()),
           read: false,
@@ -4907,8 +4981,8 @@ export default function DODMap() {
   const handleInviteFeed = useCallback((roomId: string) => {
     const feed = liveFeeds.find(f => f.room_id === roomId);
     if (!feed) return;
-    setMsgModal(feed.user_id);
-  }, [liveFeeds]);
+    openComms(feed.user_id);
+  }, [liveFeeds, openComms]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -4969,26 +5043,34 @@ export default function DODMap() {
   };
 
   const handleSendMessage = (to: string, content: string, priority: "low" | "normal" | "high" | "urgent") => {
-    const newMsg: Message = {
-      id: `msg_${Date.now()}`, from: "COMMANDER", to, content, time: new Date(), read: false, priority,
-    };
-    setMessages(prev => [...prev, newMsg]);
-    setEvents(prev => [...prev, {
-      id: `msg_ev_${Date.now()}`, time: new Date(), type: "MESSAGE",
-      user: "Commander", team: "Team Alpha",
-      event: `MSG to ${to === "ALL" ? "all" : users.find(u => u.user_id === to)?.name || to} [${priority}]`,
-      location: "Command",
-    }]);
-    if (isConnectedRef.current) {
-      const payload = to === "ALL"
-        ? { to_all: true, content, priority }
-        : { to_user_id: to, to_all: false, content, priority };
-      api.sendMessage(payload).catch(console.warn);
-    }
+    const payload = to === "ALL"
+      ? { to_all: true, content, priority }
+      : { to_user_id: to, to_all: false, content, priority };
+    api.sendMessage(payload).then(res => {
+      const m = res.data as {
+        id: string; from_user_id: string; from_user_name?: string;
+        to_user_id?: string; to_team_id?: string; to_all: boolean;
+        content: string; created_at: string; priority?: string; is_read: boolean;
+      };
+      if (!m?.id) return;
+      setMessages(prev => {
+        if (prev.find(x => String(x.id) === String(m.id))) return prev;
+        return [...prev, {
+          id: String(m.id),
+          from: m.from_user_name ?? currentUser?.full_name ?? "Me",
+          fromId: String(m.from_user_id),
+          to,
+          content: m.content,
+          time: new Date(m.created_at),
+          read: true,
+          priority: (m.priority ?? "normal") as Message["priority"],
+        }];
+      });
+    }).catch(console.warn);
   };
 
   const handleOpenSOSComms = (userId: string) => {
-    setMsgModal(userId);
+    openComms(userId);
   };
 
   const handleAutoDispatchSOSUnits = (userIds: string[]) => {
@@ -5099,19 +5181,6 @@ export default function DODMap() {
     }
   };
 
-  const handleZoneMode = () => {
-    if (zoneMode && pendingRoute.length >= 2) {
-      setShowRouteModal(true);
-    } else if (zoneMode) {
-      setZoneMode(false);
-      setPendingRoute([]);
-    } else {
-      setZoneMode(true);
-      setRouteDrawMode(false);
-      setPendingRoute([]);
-    }
-  };
-
   const handleCircleMode = () => {
     if (circleMode) {
       setCircleMode(false);
@@ -5136,7 +5205,7 @@ export default function DODMap() {
 
     if (!isConnectedRef.current) return;
     try {
-      const res = await api.createZone({
+      await api.createZone({
         name,
         zone_type: zoneType,
         color,
@@ -5147,7 +5216,6 @@ export default function DODMap() {
         assigned_team_ids: teamIds,
         assigned_user_ids: [],
       });
-      const z = res.data as { id: string; center_lat: number; center_lng: number; radius_m: number; zone_type: string; name: string; color: string; assigned_team_ids: string[] };
       setEvents(prev => [{
         id: `zone_${Date.now()}`, time: new Date(), type: "ZONE",
         user: "Commander", team: "Team Alpha",
@@ -5800,7 +5868,7 @@ export default function DODMap() {
               expanded={panels.selectedUser}
               onToggle={() => togglePanel("selectedUser")}
               onFlag={handleFlag}
-              onMessage={(uid) => setMsgModal(uid)}
+              onMessage={(uid) => openComms(uid)}
               onCreateRoute={handleCreateRouteForUser}
             />
             <AlertsPanel
@@ -5837,25 +5905,34 @@ export default function DODMap() {
               onToggle={() => togglePanel("quickActions")}
               onExport={handleExport}
               onRefresh={loadData}
-              onMessageAll={() => setMsgModal("ALL")}
+              onMessageAll={() => openComms("ALL")}
               onTeamFilter={handleTeamFilter}
               teamFilter={teamFilter}
               onRouteMode={handleRouteMode}
               routeDrawMode={routeDrawMode}
               poiType={selectedPOIType}
               onPOITypeChange={setSelectedPOIType}
-              onZoneMode={handleZoneMode}
-              zoneMode={zoneMode}
               onCircleMode={handleCircleMode}
               circleMode={circleMode}
             />
-            <CommsPanel
-              messages={messages}
-              users={users}
-              expanded={panels.comms}
-              onToggle={() => togglePanel("comms")}
-              onSend={handleSendMessage}
-            />
+            <button
+              onClick={() => openComms("ALL")}
+              className="w-full flex items-center justify-between px-3 py-2.5 rounded-lg transition-all hover:bg-blue-500/5 group"
+              style={{ backgroundColor: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.14)" }}>
+              <div className="flex items-center gap-2">
+                <FiMessageSquare size={14} color="#3b82f6" />
+                <span className="text-xs font-semibold text-slate-300 tracking-wide">COMMS</span>
+              </div>
+              <div className="flex items-center gap-2">
+                {messages.filter(m => !m.read).length > 0 && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                    style={{ backgroundColor: "#22c55e", color: "white" }}>
+                    {messages.filter(m => !m.read).length}
+                  </span>
+                )}
+                <FiChevronRight size={13} color="#64748b" />
+              </div>
+            </button>
             <ForceManagementPanel
               expanded={forceExpanded}
               onToggle={() => setForceExpanded(p => !p)}
@@ -5910,13 +5987,16 @@ export default function DODMap() {
         />
       )}
 
-      {msgModal !== null && (
-        <MessageModal
-          toUserId={msgModal === "ALL" ? null : msgModal}
-          users={users}
+      {showCommsModal && (
+        <CommsModal
           messages={messages}
+          users={users}
+          dbTeams={dbTeams}
+          currentUserId={currentUser?.id ?? ""}
+          currentUserName={currentUser?.full_name ?? currentUser?.username ?? "Me"}
           onSend={handleSendMessage}
-          onClose={() => setMsgModal(null)}
+          onClose={() => setShowCommsModal(false)}
+          initialConvId={commsInitialConvId}
         />
       )}
 
@@ -5946,7 +6026,6 @@ export default function DODMap() {
 
       {showCircleModal && circleCenter && circleRadius > 0 && (
         <CircleZoneModal
-          center={circleCenter}
           radius={circleRadius}
           dbTeams={dbTeams}
           onSave={handleSaveCircleZone}

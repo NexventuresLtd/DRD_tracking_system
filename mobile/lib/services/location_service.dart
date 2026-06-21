@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class LocationService {
   StreamSubscription<Position>? _positionStream;
@@ -18,7 +19,48 @@ class LocationService {
     }
     if (permission == LocationPermission.deniedForever) return false;
 
+    // Request "always allow" so GPS keeps streaming when the app is backgrounded.
+    // On Android 10+, this prompts the user to choose "Allow all the time" in settings.
+    // On iOS it shows the native "Always" location dialog.
+    if (Platform.isAndroid || Platform.isIOS) {
+      final always = await Permission.locationAlways.status;
+      if (!always.isGranted) {
+        await Permission.locationAlways.request();
+      }
+    }
+
     return true;
+  }
+
+  /// Returns current status of each permission used by the app.
+  static Future<Map<String, PermissionStatus>> checkAllPermissions() async {
+    final results = await [
+      Permission.locationAlways,
+      Permission.locationWhenInUse,
+      Permission.camera,
+      Permission.microphone,
+      Permission.photos,
+      Permission.notification,
+    ].request();
+    return {
+      'locationAlways': results[Permission.locationAlways]!,
+      'locationWhenInUse': results[Permission.locationWhenInUse]!,
+      'camera': results[Permission.camera]!,
+      'microphone': results[Permission.microphone]!,
+      'photos': results[Permission.photos]!,
+      'notification': results[Permission.notification]!,
+    };
+  }
+
+  static Future<Map<String, PermissionStatus>> statusAllPermissions() async {
+    return {
+      'locationAlways': await Permission.locationAlways.status,
+      'locationWhenInUse': await Permission.locationWhenInUse.status,
+      'camera': await Permission.camera.status,
+      'microphone': await Permission.microphone.status,
+      'photos': await Permission.photos.status,
+      'notification': await Permission.notification.status,
+    };
   }
 
   void startTracking() {

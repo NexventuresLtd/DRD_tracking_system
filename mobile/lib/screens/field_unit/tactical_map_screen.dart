@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show HapticFeedback;
 import 'package:http/http.dart' as http;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:image_picker/image_picker.dart';
@@ -14,6 +15,8 @@ import '../../config/constants.dart';
 import '../../config/theme.dart';
 import '../../providers/auth_provider.dart';
 import 'live_feed_screen.dart';
+import 'comms_screen.dart';
+import 'mobile_comms_screen.dart';
 import '../../services/notification_service.dart';
 import '../../providers/location_provider.dart';
 import '../../services/api_service.dart';
@@ -211,6 +214,89 @@ const _sosTypes = [
   },
 ];
 
+// ─── Coordinate helpers ───────────────────────────────────────────────────────
+
+String _decimalToDMS(double decimal, bool isLat) {
+  final dir = isLat ? (decimal >= 0 ? 'N' : 'S') : (decimal >= 0 ? 'E' : 'W');
+  final abs = decimal.abs();
+  final deg = abs.floor();
+  final minFull = (abs - deg) * 60;
+  final min = minFull.floor();
+  final sec = ((minFull - min) * 60).toStringAsFixed(2);
+  return "$deg° $min' $sec\" $dir";
+}
+
+String _toMGRS(double lat, double lng) {
+  try {
+    const a = 6378137.0, f = 1 / 298.257223563;
+    final b = a * (1 - f);
+    final e2 = 1 - (b * b) / (a * a);
+    final latRad = lat * pi / 180;
+    final lngRad = lng * pi / 180;
+    final zone = (lng + 180) ~/ 6 + 1;
+    final cm = ((zone - 1) * 6 - 180 + 3) * (pi / 180);
+    final n0 = lat >= 0 ? 0.0 : 10000000.0;
+    const k0 = 0.9996, e0 = 500000.0;
+    final nn = (a - b) / (a + b);
+    final n2 = nn * nn, n3 = nn * n2, n4 = nn * n3;
+    final a0 = a * (1 - nn + (5 / 4) * (n2 - n3) + (81 / 64) * n4);
+    final b0 = (3 * a * nn / 2) * (1 - nn + (7 / 8) * (n2 - n3));
+    final c0 = (15 * a * n2 / 16) * (1 - nn);
+    final d0 = 35 * a * n3 / 48;
+    final M =
+        a0 * latRad -
+        b0 * sin(2 * latRad) +
+        c0 * sin(4 * latRad) -
+        d0 * sin(6 * latRad);
+    final sinLat = sin(latRad), cosLat = cos(latRad), tanLat = tan(latRad);
+    final nu = a / sqrt(1 - e2 * sinLat * sinLat);
+    final p = lngRad - cm;
+    final ep2 = e2 / (1 - e2);
+    final easting =
+        k0 *
+            nu *
+            (p * cosLat +
+                (p * p * p * cosLat * cosLat * cosLat / 6) *
+                    (1 - tanLat * tanLat + ep2 * cosLat * cosLat)) +
+        e0;
+    final northing =
+        k0 *
+            (M +
+                nu *
+                    tanLat *
+                    (p * p * cosLat * cosLat / 2 +
+                        p *
+                            p *
+                            p *
+                            p *
+                            cosLat *
+                            cosLat *
+                            cosLat *
+                            cosLat *
+                            (5 - tanLat * tanLat + 9 * ep2 * cosLat * cosLat) /
+                            24)) +
+        n0;
+    final e = easting.round(), nr = northing.round();
+    const latBands = 'CDEFGHJKLMNPQRSTUVWX';
+    final latBandIdx = ((lat + 80) / 8).floor().clamp(0, 19);
+    final latBand = latBands[latBandIdx];
+    final col100 = ((e % 1000000) / 100000).floor();
+    final row100 = ((nr % 2000000) / 100000).floor();
+    const colLetters = 'ABCDEFGHJKLMNPQRSTUVWXYZ';
+    const rowLetters = 'ABCDEFGHJKLMNPQRSTUV';
+    final setNum = ((zone - 1) % 6) + 1;
+    final colOffset = [0, 8, 16, 0, 8, 16][setNum - 1];
+    final rowOffset = setNum % 2 == 0 ? 5 : 0;
+    final colLetter = colLetters[(col100 + colOffset) % 24];
+    final rowLetter = rowLetters[(row100 + rowOffset) % 20];
+    final eLocal = (e % 100000).toString().padLeft(5, '0');
+    final nLocal = (nr % 100000).toString().padLeft(5, '0');
+    return '$zone$latBand $colLetter$rowLetter $eLocal $nLocal';
+  } catch (_) {
+    return 'MGRS N/A';
+  }
+}
+
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 
 class TacticalMapScreen extends StatefulWidget {
@@ -231,6 +317,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   TacMapType _mapType = TacMapType.tactical;
   List<Map<String, dynamic>> _teamLocations = [];
   List<Map<String, dynamic>> _allLocations = []; // all users visible on map
+  // Team Leader SOS alerts: incoming SOS from own team members
+  final List<Map<String, dynamic>> _teamSosAlerts = [];
   List<Map<String, dynamic>> _myRoutes = [];
   List<Map<String, dynamic>> _sharedPois = [];
   List<Map<String, dynamic>> _messages = [];
@@ -240,6 +328,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   bool _sosActive = false;
   bool _panelOpen = false;
   bool _sending = false;
+  String? _chatRecipientId;
+  String _chatRecipientLabel = 'Coordinator';
   Map<String, dynamic>? _activeNavRoute;
   LatLng? _navDestination;
   Map<String, dynamic>? _activeFollowSession;
@@ -332,7 +422,7 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         ..headers['Authorization'] = 'Bearer $token'
         ..files.add(
           await http.MultipartFile.fromPath(
-            'files',            // server expects field name "files" (plural)
+            'files', // server expects field name "files" (plural)
             image.path,
             filename: image.name,
             contentType: mediaTypeForImage(image.path),
@@ -517,29 +607,45 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
     // Live feed option — open camera as live stream to command
     if (pick == 'live') {
-      await Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveFeedScreen()));
+      await Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => const LiveFeedScreen()),
+      );
       return;
     }
 
     if (pick == null) return;
 
     final source = pick == 'camera' ? ImageSource.camera : ImageSource.gallery;
-    final perm = source == ImageSource.camera ? Permission.camera : Permission.photos;
+    final perm = source == ImageSource.camera
+        ? Permission.camera
+        : Permission.photos;
     if (await perm.isDenied) await perm.request();
     if (!mounted) return;
 
     final picker = ImagePicker();
-    final image = await picker.pickImage(source: source, imageQuality: 75, maxWidth: 1280);
+    final image = await picker.pickImage(
+      source: source,
+      imageQuality: 75,
+      maxWidth: 1280,
+    );
     if (image == null || !mounted) return;
 
     _showSnack('Uploading evidence…', color: DRDTheme.primaryColor);
-    final url = await _uploadImageAsEvidence(image: image, poiId: poiId, caption: markLabel);
+    final url = await _uploadImageAsEvidence(
+      image: image,
+      poiId: poiId,
+      caption: markLabel,
+    );
 
     if (!mounted) return;
     if (url != null) {
       _showSnack('Evidence photo uploaded ✓', color: DRDTheme.successColor);
     } else {
-      _showSnack('Upload failed — check connection', color: const Color(0xFFEF4444));
+      _showSnack(
+        'Upload failed — check connection',
+        color: const Color(0xFFEF4444),
+      );
     }
   }
 
@@ -577,124 +683,94 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     );
   }
 
-  // ── Chat image upload ─────────────────────────────────────────────────────────
-
-  Future<void> _pickAndSendChatImage() async {
-    // Show source picker first (no async gap before context use)
-    final source = await showModalBottomSheet<ImageSource?>(
-      context: context,
-      backgroundColor: const Color(0xFF0F1C2E),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (ctx) => Padding(
-        padding: const EdgeInsets.fromLTRB(20, 16, 20, 32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 18),
-              decoration: BoxDecoration(
-                color: Colors.white24,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const Text(
-              'Send Image',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 15,
-                fontWeight: FontWeight.bold,
-                fontFamily: 'Poppins',
-              ),
-            ),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: _evidencePickerBtn(
-                    Icons.camera_alt,
-                    'Camera',
-                    DRDTheme.primaryColor,
-                    () => Navigator.pop(ctx, ImageSource.camera),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child: _evidencePickerBtn(
-                    Icons.photo_library_outlined,
-                    'Gallery',
-                    DRDTheme.accentColor,
-                    () => Navigator.pop(ctx, ImageSource.gallery),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (source == null || !mounted) return;
-
-    // Request permission after user chose source
-    final perm = source == ImageSource.camera
-        ? Permission.camera
-        : Permission.photos;
-    if (await perm.isDenied) await perm.request();
-    if (!mounted) return;
-
-    final picker = ImagePicker();
-    final image = await picker.pickImage(
-      source: source,
-      imageQuality: 70,
-      maxWidth: 1024,
-    );
-    if (image == null || !mounted) return;
-
-    setState(() => _sending = true);
-    final url = await _uploadImageAsEvidence(image: image);
-    if (!mounted) return;
-    if (url != null) {
-      await _sendMessage('[evidence_image]$url');
-    } else {
-      _showSnack('Image upload failed', color: DRDTheme.dangerColor);
-    }
-    if (mounted) setState(() => _sending = false);
-  }
 
   Future<void> _loadMapData() async {
     if (!mounted) return;
     final auth = context.read<AuthProvider>();
     final teamId = auth.user?.teamId;
     final userId = auth.user?.id;
+    final isPlainFieldUser =
+        (auth.user?.isFieldUnit ?? false) && !(auth.user?.isTeamLead ?? false);
 
+    if (isPlainFieldUser) {
+      // Field User (Tier 4): only own routes and follow session — no other users visible
+      final results = await Future.wait([
+        _api
+            .get(
+              '/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}',
+            )
+            .catchError((_) => null),
+        if (teamId != null)
+          _api
+              .get('/routes?is_active=true&team_id=$teamId')
+              .catchError((_) => null),
+        _api.get('/route-follow-sessions/me').catchError((_) => null),
+      ]);
+      if (!mounted) return;
+      final hasTeam = teamId != null;
+      final userRoutes =
+          (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final teamRoutes = hasTeam
+          ? ((results[1] as List?)?.cast<Map<String, dynamic>>() ?? [])
+          : <Map<String, dynamic>>[];
+      final seen = <dynamic>{for (final r in userRoutes) r['id']};
+      final mergedRoutes = [
+        ...userRoutes,
+        ...teamRoutes.where((r) => seen.add(r['id'])),
+      ];
+      final sessionResult = results[hasTeam ? 2 : 1];
+      setState(() {
+        _allLocations = [];
+        _teamLocations = [];
+        _myRoutes = mergedRoutes;
+        _sharedPois = [];
+        final session = sessionResult;
+        if (session is Map<String, dynamic>) _activeFollowSession = session;
+      });
+      return;
+    }
+
+    // Team Leader / Commander path — load all relevant data
     final results = await Future.wait([
-      _api.get('/locations').catchError((_) => null),                          // all users
-      _api.get(teamId != null ? '/locations?team_id=$teamId' : '/locations').catchError((_) => null), // team only
-      _api.get('/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}').catchError((_) => null),
-      if (teamId != null) _api.get('/routes?is_active=true&team_id=$teamId').catchError((_) => null),
+      _api.get('/locations').catchError((_) => null),
+      _api
+          .get(teamId != null ? '/locations?team_id=$teamId' : '/locations')
+          .catchError((_) => null),
+      _api
+          .get(
+            '/routes?is_active=true${userId != null ? '&user_id=$userId' : ''}',
+          )
+          .catchError((_) => null),
+      if (teamId != null)
+        _api
+            .get('/routes?is_active=true&team_id=$teamId')
+            .catchError((_) => null),
       _api.get('/pois?status=active').catchError((_) => null),
       _api.get('/route-follow-sessions/me').catchError((_) => null),
     ]);
 
     if (!mounted) return;
     final hasTeam = teamId != null;
-    final userRoutes = (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
-    final teamRoutes = hasTeam ? ((results[3] as List?)?.cast<Map<String, dynamic>>() ?? []) : <Map<String, dynamic>>[];
+    final userRoutes =
+        (results[2] as List?)?.cast<Map<String, dynamic>>() ?? [];
+    final teamRoutes = hasTeam
+        ? ((results[3] as List?)?.cast<Map<String, dynamic>>() ?? [])
+        : <Map<String, dynamic>>[];
     final seen = <dynamic>{for (final r in userRoutes) r['id']};
-    final mergedRoutes = [...userRoutes, ...teamRoutes.where((r) => seen.add(r['id']))];
+    final mergedRoutes = [
+      ...userRoutes,
+      ...teamRoutes.where((r) => seen.add(r['id'])),
+    ];
     final poisResult = results[hasTeam ? 4 : 3];
     final sessionResult = results[hasTeam ? 5 : 4];
 
     setState(() {
-      _allLocations  = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      _teamLocations = (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
-      _myRoutes      = mergedRoutes;
-      _sharedPois    = (poisResult as List?)?.cast<Map<String, dynamic>>() ?? [];
-      final session  = sessionResult;
+      _allLocations = (results[0] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _teamLocations =
+          (results[1] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      _myRoutes = mergedRoutes;
+      _sharedPois = (poisResult as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final session = sessionResult;
       if (session is Map<String, dynamic>) _activeFollowSession = session;
     });
   }
@@ -702,21 +778,62 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Future<void> _loadMessages() async {
     if (!mounted) return;
     try {
-      final res = await _api.get('/messages?size=50');
+      final res = await _api.get('/messages?size=80');
       if (!mounted) return;
       final items =
           ((res as Map<String, dynamic>?)?['items'] as List?)
               ?.cast<Map<String, dynamic>>() ??
           [];
-      setState(() => _messages = items.reversed.toList());
+      // API returns newest-first; reverse so oldest is at top, newest at bottom
+      final sorted = items.reversed.toList();
+      setState(() => _messages = sorted);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (_msgScroll.hasClients) {
+          _msgScroll.jumpTo(_msgScroll.position.maxScrollExtent);
+        }
+      });
     } catch (_) {}
   }
 
   void _connectWebSockets() async {
     // Cache auth info BEFORE any await to avoid BuildContext-across-async-gap warning
-    final cachedTeamName = context.read<AuthProvider>().user?.teamName ?? 'Your Team';
+    final authUser = context.read<AuthProvider>().user;
+    final cachedTeamName = authUser?.teamName ?? 'Your Team';
+    final cachedUserId = authUser?.id;
+    final cachedTeamId = authUser?.teamId;
+    final cachedIsPlainFieldUser =
+        (authUser?.isFieldUnit ?? false) && !(authUser?.isTeamLead ?? false);
+    final cachedIsTeamLead = authUser?.isTeamLead ?? false;
     final token = await _storage.getToken();
     if (token == null) return;
+
+    if (cachedIsPlainFieldUser && cachedTeamId != null) {
+      try {
+        final teamResult = await _api.get('/teams/$cachedTeamId');
+        if (mounted && teamResult is Map<String, dynamic>) {
+          final leadId = teamResult['lead_id']?.toString();
+          var leadLabel = teamResult['lead_name']?.toString() ?? cachedTeamName;
+          final members =
+              (teamResult['members'] as List?)?.cast<Map<String, dynamic>>() ??
+              const [];
+          for (final member in members) {
+            if (member['user_id']?.toString() == leadId) {
+              final candidate = member['user_name']?.toString();
+              if (candidate != null && candidate.isNotEmpty) {
+                leadLabel = candidate;
+              }
+              break;
+            }
+          }
+          if (leadId != null && leadId != cachedUserId) {
+            setState(() {
+              _chatRecipientId = leadId;
+              _chatRecipientLabel = leadLabel;
+            });
+          }
+        }
+      } catch (_) {}
+    }
 
     // Location WebSocket – receive real-time team positions
     _locChannel = WebSocketChannel.connect(
@@ -727,6 +844,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       final d = (data['data'] ?? data) as Map<String, dynamic>;
       final uid = d['user_id'] as String?;
       if (uid == null) return;
+      // Field users must not receive other users' positions via WS
+      if (cachedIsPlainFieldUser && uid != cachedUserId) return;
       setState(() {
         final idx = _teamLocations.indexWhere((l) => l['user_id'] == uid);
         if (idx >= 0) {
@@ -745,18 +864,15 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       final data = jsonDecode(raw as String) as Map<String, dynamic>;
       final d = (data['data'] ?? data) as Map<String, dynamic>;
       if (d['content'] == null) return;
+      // Only store messages relevant to this user (server broadcasts to all)
+      final toAll = d['to_all'] == true;
+      final toMe = d['to_user_id'] == cachedUserId;
+      final fromMe = d['from_user_id'] == cachedUserId;
+      final toMyTeam = cachedTeamId != null && d['to_team_id'] == cachedTeamId;
+      if (!toAll && !toMe && !fromMe && !toMyTeam) return;
       setState(() {
         if (!_messages.any((m) => m['id'] == d['id'])) {
           _messages.add(d);
-        }
-      });
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (_msgScroll.hasClients) {
-          _msgScroll.animateTo(
-            _msgScroll.position.maxScrollExtent,
-            duration: const Duration(milliseconds: 200),
-            curve: Curves.easeOut,
-          );
         }
       });
     });
@@ -773,12 +889,40 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           final data = jsonDecode(raw as String) as Map<String, dynamic>;
           final d = (data['data'] ?? data) as Map<String, dynamic>;
           final eventType = (d['event_type'] ?? '').toString().toUpperCase();
-          if (eventType == 'ROUTE' || eventType == 'ZONE' || eventType == 'POI' || eventType.startsWith('ROUTE_FOLLOW')) {
+
+          // Team Leader: detect SOS from own team members
+          if (cachedIsTeamLead && eventType == 'FLAG') {
+            final meta = d['event_metadata'] as Map<String, dynamic>? ?? {};
+            final isCancelled = meta['sos_cancel'] == true;
+            final senderTeamId = d['team_id'] as String?;
+            final userId = d['user_id'] as String?;
+            if (!isCancelled &&
+                senderTeamId == cachedTeamId &&
+                userId != cachedUserId) {
+              HapticFeedback.heavyImpact();
+              setState(() {
+                _teamSosAlerts.removeWhere((e) => e['user_id'] == userId);
+                _teamSosAlerts.add(Map<String, dynamic>.from(d));
+              });
+            } else if (isCancelled && userId != null) {
+              setState(
+                () => _teamSosAlerts.removeWhere((e) => e['user_id'] == userId),
+              );
+            }
+          }
+
+          if (eventType == 'ROUTE' ||
+              eventType == 'ZONE' ||
+              eventType == 'POI' ||
+              eventType.startsWith('ROUTE_FOLLOW')) {
             _loadMapData();
-            // Push notification for new route assigned (works even when app is in background)
             if (eventType == 'ROUTE') {
-              final routeName = d['description'] as String? ?? 'New mission assigned';
-              NotificationService.instance.showNewRoute(routeName, cachedTeamName);
+              final routeName =
+                  d['description'] as String? ?? 'New mission assigned';
+              NotificationService.instance.showNewRoute(
+                routeName,
+                cachedTeamName,
+              );
             }
           }
         } catch (_) {}
@@ -883,24 +1027,23 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     );
   }
 
-  Future<void> _sendMessage(String content) async {
-    if (content.trim().isEmpty) return;
+  Future<void> _cancelSOSTactical() async {
     final auth = context.read<AuthProvider>();
-    setState(() => _sending = true);
     try {
-      final res = await _api.post('/messages', {
-        'to_all': auth.user?.teamId == null,
-        if (auth.user?.teamId != null) 'to_team_id': auth.user!.teamId,
-        'content': content.trim(),
-        'priority': 'normal',
+      await _api.post('/events', {
+        'event_type': 'FLAG',
+        'user_id': auth.user?.id,
+        'description':
+            'SOS cancelled by field unit — ${auth.user?.fullName ?? "Field Unit"}',
+        'severity': 'low',
+        'event_metadata': {'sos_cancel': true},
       });
-      if (res != null) {
-        _msgCtrl.clear();
-        await _loadMessages();
-      }
     } catch (_) {}
-    setState(() => _sending = false);
+    if (!mounted) return;
+    setState(() => _sosActive = false);
+    _showSnack('SOS cancelled.', color: DRDTheme.warningColor);
   }
+
 
   // ── Dialogs ──────────────────────────────────────────────────────────────────
 
@@ -1331,12 +1474,31 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     ),
                 ],
 
+                // ── Team Leader SOS alert banner ───────────────────────────
+                if ((auth.user?.isTeamLead ?? false) &&
+                    _teamSosAlerts.isNotEmpty)
+                  Positioned(
+                    top: topPad + 4,
+                    left: 0,
+                    right: 0,
+                    child: _buildTeamSosBanner(),
+                  ),
+
                 // ── Left tactical action column ────────────────────────────
                 Positioned(
                   left: 8,
                   top: max(topPad + 120, screenH / 2 - 90),
                   child: _buildActionColumn(),
                 ),
+
+                // ── Evidence quick button (Field User only) ────────────────
+                if ((auth.user?.isFieldUnit ?? false) &&
+                    !(auth.user?.isTeamLead ?? false))
+                  Positioned(
+                    bottom: _panelOpen ? panelHeight + 100 : 112,
+                    left: 12,
+                    child: _buildEvidenceButton(),
+                  ),
 
                 // ── SOS button ─────────────────────────────────────────────
                 Positioned(
@@ -1351,6 +1513,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   right: 12,
                   child: _buildNavFabs(loc, myPos),
                 ),
+
+                // ── Team status strip (Team Leader only) ──────────────────
+                if ((auth.user?.isTeamLead ?? false) &&
+                    _teamLocations.isNotEmpty)
+                  Positioned(
+                    bottom: _panelOpen ? panelHeight + 16 : 16,
+                    left: 80,
+                    right: 80,
+                    child: _buildTeamStatusStrip(),
+                  ),
 
                 // ── Comms panel — only visible when opened ─────────────────
                 if (_panelOpen)
@@ -1400,10 +1572,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           ),
         // Route polylines — OSRM roads starting from soldier's position
         // Trigger fetch/refresh whenever position or routes change
-        Builder(builder: (_) {
-          _fetchAllRouteRoads(myPos);
-          return const SizedBox.shrink();
-        }),
+        Builder(
+          builder: (_) {
+            _fetchAllRouteRoads(myPos);
+            return const SizedBox.shrink();
+          },
+        ),
         PolylineLayer(polylines: _buildRouteLines()),
         // Active route: OSRM road — only shown once road is available (no straight-line fallback)
         if (_navDestination != null && _activeRouteRoad.length >= 2)
@@ -1425,8 +1599,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         MarkerLayer(markers: _buildSharedPoiMarkers()),
         // Tactical marks
         MarkerLayer(markers: _buildMarkMarkers()),
-        // Other users (not in same team) — grey markers, no location detail
-        MarkerLayer(markers: _buildAllUserMarkers(myId)),
+        // Other users (not in same team) — hidden for team leads (shown as counts in badge)
+        if (!(context.read<AuthProvider>().user?.isTeamLead ?? false))
+          MarkerLayer(markers: _buildAllUserMarkers(myId)),
         // Team members — blue markers, full detail on tap
         MarkerLayer(markers: _buildTeamMarkers(myId)),
         // Own position
@@ -1610,61 +1785,61 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             child: GestureDetector(
               onTap: () => _showUserSummary(l, isSameTeam: true),
               child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Solid blue circle with white initials
-                Container(
-                  width: 38,
-                  height: 38,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: DRDTheme.primaryColor,
-                    border: Border.all(color: statusColor, width: 2.5),
-                    boxShadow: [
-                      BoxShadow(
-                        color: DRDTheme.primaryColor.withValues(alpha: 0.45),
-                        blurRadius: 8,
-                        spreadRadius: 1,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Solid blue circle with white initials
+                  Container(
+                    width: 38,
+                    height: 38,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: DRDTheme.primaryColor,
+                      border: Border.all(color: statusColor, width: 2.5),
+                      boxShadow: [
+                        BoxShadow(
+                          color: DRDTheme.primaryColor.withValues(alpha: 0.45),
+                          blurRadius: 8,
+                          spreadRadius: 1,
+                        ),
+                      ],
+                    ),
+                    child: Center(
+                      child: Text(
+                        initials,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 0.5,
+                        ),
                       ),
-                    ],
+                    ),
                   ),
-                  child: Center(
+                  const SizedBox(height: 3),
+                  // Name label
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 5,
+                      vertical: 2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.72),
+                      borderRadius: BorderRadius.circular(4),
+                    ),
                     child: Text(
-                      initials,
+                      shortName,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
                         color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 0.5,
+                        fontSize: 8,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ),
-                ),
-                const SizedBox(height: 3),
-                // Name label
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 5,
-                    vertical: 2,
-                  ),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.72),
-                    borderRadius: BorderRadius.circular(4),
-                  ),
-                  child: Text(
-                    shortName,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 8,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            ),  // GestureDetector
+                ],
+              ),
+            ), // GestureDetector
           );
         })
         .whereType<Marker>()
@@ -1673,7 +1848,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   /// Markers for users outside the soldier's own team — grey, no location detail on tap.
   List<Marker> _buildAllUserMarkers(String? myId) {
-    final myTeamIds = Set<String>.from(_teamLocations.map((l) => l['user_id'] as String? ?? ''));
+    final myTeamIds = Set<String>.from(
+      _teamLocations.map((l) => l['user_id'] as String? ?? ''),
+    );
     return _allLocations
         .where((l) {
           final uid = l['user_id'] as String? ?? '';
@@ -1684,7 +1861,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           final lng = (l['longitude'] as num?)?.toDouble();
           if (lat == null || lng == null) return null;
           final name = (l['name'] ?? l['user_name']) as String? ?? '?';
-          final initials = name.split(' ').where((w) => w.isNotEmpty).take(2).map((w) => w[0].toUpperCase()).join();
+          final initials = name
+              .split(' ')
+              .where((w) => w.isNotEmpty)
+              .take(2)
+              .map((w) => w[0].toUpperCase())
+              .join();
           final status = l['status'] as String? ?? 'offline';
           final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
           return Marker(
@@ -1703,15 +1885,42 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                       shape: BoxShape.circle,
                       color: const Color(0xFF475569),
                       border: Border.all(color: statusColor, width: 2),
-                      boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.3), blurRadius: 4)],
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.3),
+                          blurRadius: 4,
+                        ),
+                      ],
                     ),
-                    child: Center(child: Text(initials, style: const TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold))),
+                    child: Center(
+                      child: Text(
+                        initials,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
                   ),
                   const SizedBox(height: 2),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
-                    decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.65), borderRadius: BorderRadius.circular(3)),
-                    child: Text(name.split(' ').first, style: const TextStyle(color: Colors.white60, fontSize: 7, fontWeight: FontWeight.w600)),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 4,
+                      vertical: 1,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.65),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                    child: Text(
+                      name.split(' ').first,
+                      style: const TextStyle(
+                        color: Colors.white60,
+                        fontSize: 7,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -1723,20 +1932,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   void _showUserSummary(Map<String, dynamic> loc, {required bool isSameTeam}) {
-    final name   = (loc['name'] ?? loc['user_name']) as String? ?? 'Unknown';
-    final team   = loc['team_name'] as String? ?? '—';
+    final name = (loc['name'] ?? loc['user_name']) as String? ?? 'Unknown';
+    final team = loc['team_name'] as String? ?? '—';
     final status = loc['status'] as String? ?? 'offline';
-    final lat    = (loc['latitude']  as num?)?.toDouble();
-    final lng    = (loc['longitude'] as num?)?.toDouble();
-    final speed  = (loc['speed']     as num?)?.toDouble() ?? 0.0;
-    final hdg    = (loc['heading']   as num?)?.toDouble() ?? 0.0;
-    final batt   = loc['battery_level'] as int?;
+    final lat = (loc['latitude'] as num?)?.toDouble();
+    final lng = (loc['longitude'] as num?)?.toDouble();
+    final speed = (loc['speed'] as num?)?.toDouble() ?? 0.0;
+    final hdg = (loc['heading'] as num?)?.toDouble() ?? 0.0;
+    final batt = loc['battery_level'] as int?;
     final statusColor = DRDTheme.statusColors[status] ?? Colors.grey;
 
     showModalBottomSheet(
       context: context,
       backgroundColor: DRDTheme.surfaceColor,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
       builder: (_) => Padding(
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 28),
         child: Column(
@@ -1744,66 +1955,162 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             // Handle
-            Center(child: Container(width: 36, height: 4, decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)))),
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
             const SizedBox(height: 14),
             // Header row
-            Row(children: [
-              Container(
-                width: 44, height: 44,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: isSameTeam ? DRDTheme.primaryColor.withValues(alpha: 0.15) : const Color(0xFF475569).withValues(alpha: 0.3),
-                  border: Border.all(color: statusColor, width: 2.5),
-                ),
-                child: Center(child: Text(
-                  name.split(' ').where((w) => w.isNotEmpty).take(2).map((w) => w[0].toUpperCase()).join(),
-                  style: TextStyle(color: isSameTeam ? DRDTheme.primaryColor : Colors.white70, fontSize: 14, fontWeight: FontWeight.bold),
-                )),
-              ),
-              const SizedBox(width: 12),
-              Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(name, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 3),
-                Row(children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                    decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.18), borderRadius: BorderRadius.circular(4)),
-                    child: Text(status.toUpperCase(), style: TextStyle(color: statusColor, fontSize: 9, fontWeight: FontWeight.bold)),
-                  ),
-                  const SizedBox(width: 6),
-                  Text(team, style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                ]),
-              ])),
-              if (!isSameTeam)
+            Row(
+              children: [
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(color: Colors.white.withValues(alpha: 0.07), borderRadius: BorderRadius.circular(6), border: Border.all(color: Colors.white12)),
-                  child: const Text('Other team', style: TextStyle(color: Colors.white38, fontSize: 9, fontWeight: FontWeight.w600)),
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: isSameTeam
+                        ? DRDTheme.primaryColor.withValues(alpha: 0.15)
+                        : const Color(0xFF475569).withValues(alpha: 0.3),
+                    border: Border.all(color: statusColor, width: 2.5),
+                  ),
+                  child: Center(
+                    child: Text(
+                      name
+                          .split(' ')
+                          .where((w) => w.isNotEmpty)
+                          .take(2)
+                          .map((w) => w[0].toUpperCase())
+                          .join(),
+                      style: TextStyle(
+                        color: isSameTeam
+                            ? DRDTheme.primaryColor
+                            : Colors.white70,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
                 ),
-            ]),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 15,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: statusColor.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              status.toUpperCase(),
+                              style: TextStyle(
+                                color: statusColor,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Text(
+                            team,
+                            style: const TextStyle(
+                              color: Colors.white54,
+                              fontSize: 11,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                if (!isSameTeam)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: Colors.white12),
+                    ),
+                    child: const Text(
+                      'Other team',
+                      style: TextStyle(
+                        color: Colors.white38,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
             const SizedBox(height: 14),
             const Divider(color: Colors.white12, height: 1),
             const SizedBox(height: 12),
             // Stats — location only visible for same-team
-            Wrap(spacing: 16, runSpacing: 8, children: [
-              if (isSameTeam && lat != null)
-                _summaryChip(Icons.location_on_outlined, '${lat.toStringAsFixed(5)}, ${lng?.toStringAsFixed(5) ?? "—"}'),
-              if (isSameTeam)
-                _summaryChip(Icons.speed_outlined, '${speed.toStringAsFixed(1)} km/h'),
-              if (isSameTeam)
-                _summaryChip(Icons.explore_outlined, 'HDG ${hdg.toStringAsFixed(0)}°'),
-              if (batt != null && isSameTeam)
-                _summaryChip(Icons.battery_std_outlined, '$batt%'),
-              if (!isSameTeam)
-                const Padding(
-                  padding: EdgeInsets.only(top: 4),
-                  child: Row(children: [
-                    Icon(Icons.lock_outline, size: 13, color: Colors.white38),
-                    SizedBox(width: 5),
-                    Text('Location details restricted to team members', style: TextStyle(color: Colors.white38, fontSize: 10)),
-                  ]),
-                ),
-            ]),
+            Wrap(
+              spacing: 16,
+              runSpacing: 8,
+              children: [
+                if (isSameTeam && lat != null)
+                  _summaryChip(
+                    Icons.location_on_outlined,
+                    '${lat.toStringAsFixed(5)}, ${lng?.toStringAsFixed(5) ?? "—"}',
+                  ),
+                if (isSameTeam)
+                  _summaryChip(
+                    Icons.speed_outlined,
+                    '${speed.toStringAsFixed(1)} km/h',
+                  ),
+                if (isSameTeam)
+                  _summaryChip(
+                    Icons.explore_outlined,
+                    'HDG ${hdg.toStringAsFixed(0)}°',
+                  ),
+                if (batt != null && isSameTeam)
+                  _summaryChip(Icons.battery_std_outlined, '$batt%'),
+                if (!isSameTeam)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 4),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.lock_outline,
+                          size: 13,
+                          color: Colors.white38,
+                        ),
+                        SizedBox(width: 5),
+                        Text(
+                          'Location details restricted to team members',
+                          style: TextStyle(color: Colors.white38, fontSize: 10),
+                        ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
           ],
         ),
       ),
@@ -1819,7 +2126,11 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     ],
   );
 
-  static const _enemyTypeIds = {'enemy_contact', 'enemy_vehicle', 'ied_suspected'};
+  static const _enemyTypeIds = {
+    'enemy_contact',
+    'enemy_vehicle',
+    'ied_suspected',
+  };
 
   List<Marker> _buildMarkMarkers() {
     return _marks.map((m) {
@@ -1833,7 +2144,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             width: markerSize,
             height: markerSize,
             decoration: BoxDecoration(
-              color: isEnemy ? const Color(0xFFEF4444).withValues(alpha: 0.25) : m.color.withValues(alpha: 0.18),
+              color: isEnemy
+                  ? const Color(0xFFEF4444).withValues(alpha: 0.25)
+                  : m.color.withValues(alpha: 0.18),
               shape: BoxShape.circle,
               border: Border.all(
                 color: isEnemy ? const Color(0xFFEF4444) : m.color,
@@ -1841,7 +2154,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               ),
               boxShadow: [
                 BoxShadow(
-                  color: (isEnemy ? const Color(0xFFEF4444) : m.color).withValues(alpha: isEnemy ? 0.7 : 0.5),
+                  color: (isEnemy ? const Color(0xFFEF4444) : m.color)
+                      .withValues(alpha: isEnemy ? 0.7 : 0.5),
                   blurRadius: isEnemy ? 14 : 6,
                   spreadRadius: isEnemy ? 3 : 1,
                 ),
@@ -1862,9 +2176,19 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
             decoration: BoxDecoration(
-              color: isEnemy ? const Color(0xFFEF4444) : m.color.withValues(alpha: 0.9),
+              color: isEnemy
+                  ? const Color(0xFFEF4444)
+                  : m.color.withValues(alpha: 0.9),
               borderRadius: BorderRadius.circular(4),
-              boxShadow: isEnemy ? [const BoxShadow(color: Color(0xFFEF4444), blurRadius: 4, spreadRadius: 0)] : null,
+              boxShadow: isEnemy
+                  ? [
+                      const BoxShadow(
+                        color: Color(0xFFEF4444),
+                        blurRadius: 4,
+                        spreadRadius: 0,
+                      ),
+                    ]
+                  : null,
             ),
             child: Text(
               m.label.split(' ').take(2).join(' '),
@@ -1888,7 +2212,12 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               ),
               child: const Text(
                 '⚠ ENEMY',
-                style: TextStyle(color: Color(0xFFEF4444), fontSize: 7, fontWeight: FontWeight.w900, letterSpacing: 0.5),
+                style: TextStyle(
+                  color: Color(0xFFEF4444),
+                  fontSize: 7,
+                  fontWeight: FontWeight.w900,
+                  letterSpacing: 0.5,
+                ),
               ),
             ),
           ],
@@ -1937,44 +2266,80 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           children: [
             Center(
               child: Container(
-                width: 36, height: 4,
+                width: 36,
+                height: 4,
                 margin: const EdgeInsets.only(bottom: 16),
-                decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+                decoration: BoxDecoration(
+                  color: Colors.white24,
+                  borderRadius: BorderRadius.circular(2),
+                ),
               ),
             ),
             // Mark header
             Row(
               children: [
                 Container(
-                  width: 40, height: 40,
+                  width: 40,
+                  height: 40,
                   decoration: BoxDecoration(
                     shape: BoxShape.circle,
                     color: m.color.withValues(alpha: 0.2),
                     border: Border.all(color: m.color, width: 2),
                   ),
-                  child: Center(child: Text(m.symbol, style: TextStyle(color: m.color, fontWeight: FontWeight.w900, fontSize: 13))),
+                  child: Center(
+                    child: Text(
+                      m.symbol,
+                      style: TextStyle(
+                        color: m.color,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(m.label, style: TextStyle(
-                        color: isEnemy ? const Color(0xFFEF4444) : Colors.white,
-                        fontSize: 16, fontWeight: FontWeight.w800, fontFamily: 'Poppins',
-                      )),
+                      Text(
+                        m.label,
+                        style: TextStyle(
+                          color: isEnemy
+                              ? const Color(0xFFEF4444)
+                              : Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w800,
+                          fontFamily: 'Poppins',
+                        ),
+                      ),
                       if (isEnemy)
                         Container(
                           margin: const EdgeInsets.only(top: 3),
-                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEF4444).withValues(alpha: 0.15),
-                            borderRadius: BorderRadius.circular(4),
-                            border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.4)),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 2,
                           ),
-                          child: const Text('⚠ ENEMY MARK', style: TextStyle(
-                            color: Color(0xFFEF4444), fontSize: 9, fontWeight: FontWeight.w900, letterSpacing: 1,
-                          )),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xFFEF4444,
+                            ).withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(4),
+                            border: Border.all(
+                              color: const Color(
+                                0xFFEF4444,
+                              ).withValues(alpha: 0.4),
+                            ),
+                          ),
+                          child: const Text(
+                            '⚠ ENEMY MARK',
+                            style: TextStyle(
+                              color: Color(0xFFEF4444),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1,
+                            ),
+                          ),
                         ),
                     ],
                   ),
@@ -1983,12 +2348,22 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
             ),
             const SizedBox(height: 16),
             // Details
-            _markDetailRow(Icons.location_on_outlined, 'Location',
-              '${m.position.latitude.toStringAsFixed(5)}, ${m.position.longitude.toStringAsFixed(5)}'),
-            _markDetailRow(Icons.access_time, 'Marked at',
-              '${m.timestamp.hour.toString().padLeft(2, '0')}:${m.timestamp.minute.toString().padLeft(2, '0')} · ${m.timestamp.day}/${m.timestamp.month}/${m.timestamp.year}'),
+            _markDetailRow(
+              Icons.location_on_outlined,
+              'Location',
+              '${m.position.latitude.toStringAsFixed(5)}, ${m.position.longitude.toStringAsFixed(5)}',
+            ),
+            _markDetailRow(
+              Icons.access_time,
+              'Marked at',
+              '${m.timestamp.hour.toString().padLeft(2, '0')}:${m.timestamp.minute.toString().padLeft(2, '0')} · ${m.timestamp.day}/${m.timestamp.month}/${m.timestamp.year}',
+            ),
             if (m.backendId != null)
-              _markDetailRow(Icons.fingerprint, 'Report ID', m.backendId!.substring(0, 8).toUpperCase()),
+              _markDetailRow(
+                Icons.fingerprint,
+                'Report ID',
+                m.backendId!.substring(0, 8).toUpperCase(),
+              ),
             const SizedBox(height: 20),
             // Start Live Feed button
             SizedBox(
@@ -1996,7 +2371,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               child: ElevatedButton.icon(
                 onPressed: () {
                   Navigator.pop(ctx);
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const LiveFeedScreen()));
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const LiveFeedScreen()),
+                  );
                 },
                 icon: const Icon(Icons.videocam_rounded, size: 16),
                 label: const Text('Start Live Feed'),
@@ -2021,7 +2399,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     label: const Text('Mark Inactive'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: DRDTheme.warningColor,
-                      side: BorderSide(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
+                      side: BorderSide(
+                        color: DRDTheme.warningColor.withValues(alpha: 0.5),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
@@ -2037,7 +2417,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     label: const Text('Delete'),
                     style: OutlinedButton.styleFrom(
                       foregroundColor: DRDTheme.dangerColor,
-                      side: BorderSide(color: DRDTheme.dangerColor.withValues(alpha: 0.5)),
+                      side: BorderSide(
+                        color: DRDTheme.dangerColor.withValues(alpha: 0.5),
+                      ),
                       padding: const EdgeInsets.symmetric(vertical: 12),
                     ),
                   ),
@@ -2057,8 +2439,25 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         children: [
           Icon(icon, size: 14, color: Colors.white38),
           const SizedBox(width: 8),
-          Text('$label: ', style: const TextStyle(color: Colors.white38, fontSize: 11, fontFamily: 'Poppins')),
-          Expanded(child: Text(value, style: const TextStyle(color: Colors.white70, fontSize: 11, fontFamily: 'Poppins', fontWeight: FontWeight.w600))),
+          Text(
+            '$label: ',
+            style: const TextStyle(
+              color: Colors.white38,
+              fontSize: 11,
+              fontFamily: 'Poppins',
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                color: Colors.white70,
+                fontSize: 11,
+                fontFamily: 'Poppins',
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
         ],
       ),
     );
@@ -2089,15 +2488,21 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   Future<void> _fetchAllRouteRoads(LatLng myPos) async {
     // Only re-fetch when we've moved significantly or have new routes
     if (_lastRoadFetchPos != null) {
-      final d = _distanceKm(myPos.latitude, myPos.longitude,
-          _lastRoadFetchPos!.latitude, _lastRoadFetchPos!.longitude);
-      if (d != null && d < 0.15 && _routeRoads.length == _myRoutes.length) return;
+      final d = _distanceKm(
+        myPos.latitude,
+        myPos.longitude,
+        _lastRoadFetchPos!.latitude,
+        _lastRoadFetchPos!.longitude,
+      );
+      if (d != null && d < 0.15 && _routeRoads.length == _myRoutes.length)
+        return;
     }
     _lastRoadFetchPos = myPos;
 
     for (final route in _myRoutes) {
       final id = route['id'] as String? ?? '';
-      final wps = (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+      final wps =
+          (route['waypoints'] as List?)?.cast<Map<String, dynamic>>() ?? [];
       if (wps.isEmpty) continue;
       final allPoints = [
         {'latitude': myPos.latitude, 'longitude': myPos.longitude},
@@ -2109,6 +2514,8 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   List<Polyline> _buildRouteLines() {
+    // When actively following a route, the OSRM cyan line is shown instead
+    if (_activeNavRoute != null) return const [];
     final polylines = <Polyline>[];
     for (final route in _myRoutes) {
       final id = route['id'] as String? ?? '';
@@ -2123,10 +2530,14 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return polylines;
   }
 
-
   List<Marker> _buildWaypointMarkers() {
     final markers = <Marker>[];
-    for (final route in _myRoutes) {
+    final routesToShow = _activeNavRoute != null
+        ? _myRoutes
+              .where((r) => r['id'] == (_activeNavRoute!['id'] as String?))
+              .toList()
+        : _myRoutes;
+    for (final route in routesToShow) {
       final wps = route['waypoints'] as List?;
       if (wps == null) continue;
       final color = _colorFromHex(route['color']);
@@ -2157,7 +2568,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   List<Marker> _buildSharedPoiMarkers() {
+    final myPoiIds = _marks.map((m) => m.backendId).whereType<String>().toSet();
     return _sharedPois
+        .where((poi) => !myPoiIds.contains(poi['id'] as String?))
         .map((poi) {
           final lat = (poi['latitude'] as num?)?.toDouble();
           final lng = (poi['longitude'] as num?)?.toDouble();
@@ -2592,7 +3005,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         children: [
           Icon(
             _routePaused ? Icons.pause_circle_rounded : Icons.navigation,
-            color: _routePaused ? DRDTheme.warningColor : const Color(0xFF00E5FF),
+            color: _routePaused
+                ? DRDTheme.warningColor
+                : const Color(0xFF00E5FF),
             size: 14,
           ),
           const SizedBox(width: 6),
@@ -2603,7 +3018,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   : routeName,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
-                color: _routePaused ? DRDTheme.warningColor : const Color(0xFF00E5FF),
+                color: _routePaused
+                    ? DRDTheme.warningColor
+                    : const Color(0xFF00E5FF),
                 fontSize: 11,
                 fontWeight: FontWeight.bold,
                 letterSpacing: 0.5,
@@ -2619,21 +3036,37 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                 decoration: BoxDecoration(
                   color: DRDTheme.successColor.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(6),
-                  border: Border.all(color: DRDTheme.successColor.withValues(alpha: 0.5)),
+                  border: Border.all(
+                    color: DRDTheme.successColor.withValues(alpha: 0.5),
+                  ),
                 ),
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.play_arrow_rounded, color: DRDTheme.successColor, size: 12),
+                    Icon(
+                      Icons.play_arrow_rounded,
+                      color: DRDTheme.successColor,
+                      size: 12,
+                    ),
                     SizedBox(width: 3),
-                    Text('RESUME', style: TextStyle(color: DRDTheme.successColor,
-                        fontSize: 9, fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                    Text(
+                      'RESUME',
+                      style: TextStyle(
+                        color: DRDTheme.successColor,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        fontFamily: 'Poppins',
+                      ),
+                    ),
                   ],
                 ),
               ),
             ),
           ] else ...[
-            Text(distLabel, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+            Text(
+              distLabel,
+              style: const TextStyle(color: Colors.white70, fontSize: 11),
+            ),
           ],
           const SizedBox(width: 8),
           GestureDetector(
@@ -2801,6 +3234,25 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
               '${loc.pendingCount} queued',
               color: DRDTheme.warningColor,
             ),
+          if (loc.hasRealFix) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 2),
+              child: Divider(height: 1, color: Colors.white12),
+            ),
+            _hRow(
+              Icons.gps_not_fixed,
+              '${loc.latitude.toStringAsFixed(5)}, ${loc.longitude.toStringAsFixed(5)}',
+            ),
+            _hRow(
+              Icons.explore,
+              '${_decimalToDMS(loc.latitude, true)}, ${_decimalToDMS(loc.longitude, false)}',
+            ),
+            _hRow(
+              Icons.grid_on,
+              _toMGRS(loc.latitude, loc.longitude),
+              color: const Color(0xFF00E5FF),
+            ),
+          ],
         ],
       ),
     );
@@ -2822,10 +3274,75 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
   }
 
   Widget _buildTeamBadge() {
+    final auth = context.read<AuthProvider>();
+    final isPlainFieldUser =
+        (auth.user?.isFieldUnit ?? false) && !(auth.user?.isTeamLead ?? false);
+    final isTeamLead = auth.user?.isTeamLead ?? false;
+    final myTeamName = auth.user?.teamName ?? '';
+
+    if (isPlainFieldUser) {
+      final teamName = auth.user?.teamName ?? 'FIELD';
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+        decoration: BoxDecoration(
+          color: DRDTheme.surfaceColor.withValues(alpha: 0.94),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.35),
+              blurRadius: 6,
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              teamName.toUpperCase(),
+              style: TextStyle(
+                color: DRDTheme.primaryColor,
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
+            const SizedBox(height: 2),
+            const Text(
+              'FIELD USER',
+              style: TextStyle(
+                color: Colors.white54,
+                fontSize: 9,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
     final active = _teamLocations.where((l) => l['status'] == 'active').length;
     final stale = _teamLocations.where((l) => l['status'] == 'stale').length;
-    final offline = _teamLocations.where((l) => l['status'] == 'offline').length;
+    final offline = _teamLocations
+        .where((l) => l['status'] == 'offline')
+        .length;
     final hasDanger = offline > 0;
+
+    // Compute other-team counts for team lead summary
+    Map<String, int> otherTeamCounts = {};
+    if (isTeamLead) {
+      final myTeamIds = Set<String>.from(
+        _teamLocations.map((l) => l['user_id'] as String? ?? ''),
+      );
+      for (final l in _allLocations) {
+        final uid = l['user_id'] as String? ?? '';
+        if (myTeamIds.contains(uid)) continue;
+        final tName = (l['team_name'] as String? ?? 'Other').toUpperCase();
+        if (tName == myTeamName.toUpperCase()) continue;
+        otherTeamCounts[tName] = (otherTeamCounts[tName] ?? 0) + 1;
+      }
+    }
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
@@ -2854,14 +3371,39 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Text(
-            'UNIT  ${_teamLocations.length}',
-            style: const TextStyle(color: Colors.white, fontSize: 11,
-                fontWeight: FontWeight.bold, letterSpacing: 0.8),
+            isTeamLead
+                ? '${myTeamName.toUpperCase()}  ${_teamLocations.length}'
+                : 'UNIT  ${_teamLocations.length}',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.8,
+            ),
           ),
           const SizedBox(height: 4),
           _badgeRow(DRDTheme.successColor, 'ACT', active),
           _badgeRow(DRDTheme.warningColor, 'STL', stale),
           _badgeRow(DRDTheme.dangerColor, 'OFF', offline, bold: hasDanger),
+          if (isTeamLead && otherTeamCounts.isNotEmpty) ...[
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 3),
+              child: Divider(height: 1, color: Colors.white12),
+            ),
+            ...otherTeamCounts.entries.map(
+              (e) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 1),
+                child: Text(
+                  '${e.key}: ${e.value}',
+                  style: const TextStyle(
+                    color: Colors.white38,
+                    fontSize: 8.5,
+                    letterSpacing: 0.6,
+                  ),
+                ),
+              ),
+            ),
+          ],
         ],
       ),
     );
@@ -3145,7 +3687,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           color: DRDTheme.primaryColor,
           solid: true,
           badge: _messages.where((m) => m['is_read'] == false).length,
-          onTap: () => setState(() => _panelOpen = true),
+          onTap: () => Navigator.push(
+            context,
+            MaterialPageRoute(builder: (_) => const MobileCommsScreen()),
+          ),
         ),
         const SizedBox(height: 6),
         _actionBtn(
@@ -3155,6 +3700,14 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
           solid: true,
           badge: _myRoutes.length,
           onTap: _showRoutesSheet,
+        ),
+        const SizedBox(height: 6),
+        _actionBtn(
+          icon: Icons.settings_outlined,
+          label: 'SETUP',
+          color: const Color(0xFF64748B),
+          solid: false,
+          onTap: () => Navigator.pushNamed(context, '/settings'),
         ),
         const SizedBox(height: 14),
         _actionBtn(
@@ -3172,8 +3725,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
 
   void _checkNearbyCheckpoints(LatLng myPos) {
     if (_activeNavRoute == null || _routePaused) return;
-    final wps = (_activeNavRoute!['waypoints'] as List?)
-        ?.cast<Map<String, dynamic>>() ?? [];
+    final wps =
+        (_activeNavRoute!['waypoints'] as List?)
+            ?.cast<Map<String, dynamic>>() ??
+        [];
     if (wps.isEmpty) return;
 
     // Check every intermediate waypoint (skip last — that's the final destination)
@@ -3181,12 +3736,16 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       final lat = (wps[i]['latitude'] as num?)?.toDouble();
       final lng = (wps[i]['longitude'] as num?)?.toDouble();
       if (lat == null || lng == null) continue;
-      final dist = (_distanceKm(myPos.latitude, myPos.longitude, lat, lng) ?? double.infinity) * 1000;
+      final dist =
+          (_distanceKm(myPos.latitude, myPos.longitude, lat, lng) ??
+              double.infinity) *
+          1000;
       if (dist <= 60) {
         setState(() {
           _currentWaypointIndex = i;
           _checkpointReached = true;
-          _currentCheckpointLabel = wps[i]['label'] as String? ?? 'Waypoint ${i + 1}';
+          _currentCheckpointLabel =
+              wps[i]['label'] as String? ?? 'Waypoint ${i + 1}';
         });
         return;
       }
@@ -3198,7 +3757,10 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
       _routePaused = true;
       _checkpointReached = false;
     });
-    _showSnack('Paused at $_currentCheckpointLabel', color: DRDTheme.warningColor);
+    _showSnack(
+      'Paused at $_currentCheckpointLabel',
+      color: DRDTheme.warningColor,
+    );
   }
 
   void _resumeFromCheckpoint() {
@@ -3218,7 +3780,9 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
         color: const Color(0xFF0F1C2E),
         borderRadius: BorderRadius.circular(14),
         border: Border.all(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
-        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16)],
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.5), blurRadius: 16),
+        ],
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -3231,20 +3795,37 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                   shape: BoxShape.circle,
                   color: DRDTheme.warningColor.withValues(alpha: 0.15),
                 ),
-                child: const Icon(Icons.flag_rounded, color: DRDTheme.warningColor, size: 16),
+                child: const Icon(
+                  Icons.flag_rounded,
+                  color: DRDTheme.warningColor,
+                  size: 16,
+                ),
               ),
               const SizedBox(width: 10),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text('CHECKPOINT REACHED',
-                        style: TextStyle(color: DRDTheme.warningColor, fontSize: 9,
-                            fontWeight: FontWeight.w800, letterSpacing: 1.5, fontFamily: 'Poppins')),
+                    const Text(
+                      'CHECKPOINT REACHED',
+                      style: TextStyle(
+                        color: DRDTheme.warningColor,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1.5,
+                        fontFamily: 'Poppins',
+                      ),
+                    ),
                     const SizedBox(height: 2),
-                    Text(_currentCheckpointLabel ?? 'Waypoint',
-                        style: const TextStyle(color: Colors.white, fontSize: 13,
-                            fontWeight: FontWeight.bold, fontFamily: 'Poppins')),
+                    Text(
+                      _currentCheckpointLabel ?? 'Waypoint',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                        fontFamily: 'Poppins',
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -3261,15 +3842,28 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     decoration: BoxDecoration(
                       color: DRDTheme.warningColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: DRDTheme.warningColor.withValues(alpha: 0.5)),
+                      border: Border.all(
+                        color: DRDTheme.warningColor.withValues(alpha: 0.5),
+                      ),
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.pause_rounded, color: DRDTheme.warningColor, size: 16),
+                        Icon(
+                          Icons.pause_rounded,
+                          color: DRDTheme.warningColor,
+                          size: 16,
+                        ),
                         SizedBox(width: 6),
-                        Text('PAUSE', style: TextStyle(color: DRDTheme.warningColor, fontSize: 11,
-                            fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                        Text(
+                          'PAUSE',
+                          style: TextStyle(
+                            color: DRDTheme.warningColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Poppins',
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -3284,15 +3878,28 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
                     decoration: BoxDecoration(
                       color: DRDTheme.successColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(8),
-                      border: Border.all(color: DRDTheme.successColor.withValues(alpha: 0.5)),
+                      border: Border.all(
+                        color: DRDTheme.successColor.withValues(alpha: 0.5),
+                      ),
                     ),
                     child: const Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.play_arrow_rounded, color: DRDTheme.successColor, size: 16),
+                        Icon(
+                          Icons.play_arrow_rounded,
+                          color: DRDTheme.successColor,
+                          size: 16,
+                        ),
                         SizedBox(width: 6),
-                        Text('CONTINUE', style: TextStyle(color: DRDTheme.successColor, fontSize: 11,
-                            fontWeight: FontWeight.w800, fontFamily: 'Poppins')),
+                        Text(
+                          'CONTINUE',
+                          style: TextStyle(
+                            color: DRDTheme.successColor,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w800,
+                            fontFamily: 'Poppins',
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -3437,48 +4044,542 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     return AnimatedBuilder(
       animation: _sosCtrl,
       builder: (_, _) {
-        return GestureDetector(
-          onTap: _showSOSDialog,
-          child: Container(
-            width: 60,
-            height: 60,
-            decoration: BoxDecoration(
-              shape: BoxShape.circle,
-              color: DRDTheme.dangerColor,
-              boxShadow: [
-                BoxShadow(
-                  color: DRDTheme.dangerColor.withValues(
-                    alpha: _sosActive ? 0.4 + 0.4 * _sosCtrl.value : 0.5,
-                  ),
-                  blurRadius: _sosActive ? 16 + 12 * _sosCtrl.value : 12,
-                  spreadRadius: _sosActive ? 2 + 4 * _sosCtrl.value : 2,
+        return Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            GestureDetector(
+              onTap: _showSOSDialog,
+              child: Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: DRDTheme.dangerColor,
+                  boxShadow: [
+                    BoxShadow(
+                      color: DRDTheme.dangerColor.withValues(
+                        alpha: _sosActive ? 0.4 + 0.4 * _sosCtrl.value : 0.5,
+                      ),
+                      blurRadius: _sosActive ? 16 + 12 * _sosCtrl.value : 12,
+                      spreadRadius: _sosActive ? 2 + 4 * _sosCtrl.value : 2,
+                    ),
+                  ],
                 ),
-              ],
-            ),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.sos,
-                  color: Colors.white,
-                  size: _sosActive ? 22 : 18,
-                ),
-                if (!_sosActive)
-                  const Text(
-                    'SOS',
-                    style: TextStyle(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(
+                      Icons.sos,
                       color: Colors.white,
-                      fontSize: 9,
+                      size: _sosActive ? 22 : 18,
+                    ),
+                    if (!_sosActive)
+                      const Text(
+                        'SOS',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 9,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            if (_sosActive) ...[
+              const SizedBox(height: 6),
+              GestureDetector(
+                onTap: _cancelSOSTactical,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: DRDTheme.dangerColor, width: 1.5),
+                    color: DRDTheme.dangerColor.withValues(alpha: 0.15),
+                  ),
+                  child: const Text(
+                    'CANCEL',
+                    style: TextStyle(
+                      color: DRDTheme.dangerColor,
+                      fontSize: 8,
                       fontWeight: FontWeight.bold,
                       letterSpacing: 1,
                     ),
                   ),
+                ),
+              ),
+            ],
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _buildTeamSosBanner() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: _teamSosAlerts.map((sos) {
+          final name = (sos['user_name'] ?? sos['description'] ?? 'Team member')
+              .toString();
+          final sosType = (sos['event_metadata']?['sos_type'] ?? 'help')
+              .toString()
+              .toUpperCase();
+          final userId = sos['user_id'] as String?;
+          final lat = (sos['location_lat'] as num?)?.toDouble();
+          final lng = (sos['location_lng'] as num?)?.toDouble();
+          final hasPos = lat != null && lng != null;
+
+          return Container(
+            margin: const EdgeInsets.only(bottom: 6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF1A0000),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: DRDTheme.dangerColor, width: 1.5),
+              boxShadow: [
+                BoxShadow(
+                  color: DRDTheme.dangerColor.withValues(alpha: 0.5),
+                  blurRadius: 16,
+                  spreadRadius: 1,
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Header row
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    color: DRDTheme.dangerColor,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(10),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.sos, color: Colors.white, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'SOS — $name',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 13,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        sosType,
+                        style: const TextStyle(
+                          color: Colors.white70,
+                          fontSize: 10,
+                          letterSpacing: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                // Coordinates block
+                if (hasPos)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 8,
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _sosCoordRow(
+                          'DD',
+                          '${lat.toStringAsFixed(6)}, ${lng.toStringAsFixed(6)}',
+                        ),
+                        const SizedBox(height: 3),
+                        _sosCoordRow(
+                          'DMS',
+                          '${_decimalToDMS(lat, true)}  ${_decimalToDMS(lng, false)}',
+                        ),
+                        const SizedBox(height: 3),
+                        _sosCoordRow('MGRS', _toMGRS(lat, lng)),
+                      ],
+                    ),
+                  )
+                else
+                  const Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    child: Text(
+                      'Location not available',
+                      style: TextStyle(color: Colors.white38, fontSize: 10),
+                    ),
+                  ),
+                // Action row
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                  child: Row(
+                    children: [
+                      if (hasPos)
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: () {
+                              _mapController.move(LatLng(lat, lng), 16);
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withValues(alpha: 0.08),
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: Colors.white24),
+                              ),
+                              child: const Row(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(
+                                    Icons.my_location,
+                                    color: Colors.white70,
+                                    size: 12,
+                                  ),
+                                  SizedBox(width: 4),
+                                  Text(
+                                    'LOCATE',
+                                    style: TextStyle(
+                                      color: Colors.white70,
+                                      fontSize: 10,
+                                      fontWeight: FontWeight.bold,
+                                      letterSpacing: 1,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ),
+                      if (hasPos) const SizedBox(width: 8),
+                      Expanded(
+                        child: GestureDetector(
+                          onTap: () => setState(
+                            () => _teamSosAlerts.removeWhere(
+                              (e) => e['user_id'] == userId,
+                            ),
+                          ),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 6),
+                            decoration: BoxDecoration(
+                              color: DRDTheme.dangerColor.withValues(
+                                alpha: 0.3,
+                              ),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(
+                                color: DRDTheme.dangerColor.withValues(
+                                  alpha: 0.6,
+                                ),
+                              ),
+                            ),
+                            child: const Text(
+                              'ACK',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _sosCoordRow(String label, String value) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 36,
+          child: Text(
+            label,
+            style: const TextStyle(
+              color: Color(0xFFEF4444),
+              fontSize: 9,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        Expanded(
+          child: Text(
+            value,
+            style: const TextStyle(
+              color: Colors.white70,
+              fontSize: 9,
+              fontFamily: 'monospace',
+            ),
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildTeamStatusStrip() {
+    final myId = context.read<AuthProvider>().user?.id;
+    final members = _teamLocations.where((l) => l['user_id'] != myId).toList();
+    if (members.isEmpty) return const SizedBox.shrink();
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: DRDTheme.surfaceColor.withValues(alpha: 0.92),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withValues(alpha: 0.35), blurRadius: 6),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: members.map((l) {
+          final name = ((l['name'] ?? l['user_name']) as String? ?? '?')
+              .split(' ')
+              .first;
+          final status = l['status'] as String? ?? 'offline';
+          final color = DRDTheme.statusColors[status] ?? Colors.grey;
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(shape: BoxShape.circle, color: color),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                name,
+                style: TextStyle(
+                  color: color,
+                  fontSize: 9,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          );
+        }).toList(),
+      ),
+    );
+  }
+
+  Widget _buildEvidenceButton() {
+    return GestureDetector(
+      onTap: _showQuickEvidenceSheet,
+      child: Container(
+        width: 52,
+        height: 52,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: const Color(0xFF1E3A5F),
+          border: Border.all(color: DRDTheme.primaryColor, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: DRDTheme.primaryColor.withValues(alpha: 0.4),
+              blurRadius: 10,
+              spreadRadius: 1,
+            ),
+          ],
+        ),
+        child: const Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.camera_alt, color: DRDTheme.primaryColor, size: 20),
+            Text(
+              'EVID',
+              style: TextStyle(
+                color: DRDTheme.primaryColor,
+                fontSize: 7,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.8,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showQuickEvidenceSheet() async {
+    final loc = context.read<LocationProvider>();
+    final auth = context.read<AuthProvider>();
+
+    final pick = await showModalBottomSheet<String?>(
+      context: context,
+      backgroundColor: const Color(0xFF0F1C2E),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (ctx) {
+        final noteCtrl = TextEditingController();
+        return StatefulBuilder(
+          builder: (ctx2, setS) => Padding(
+            padding: EdgeInsets.fromLTRB(
+              20,
+              16,
+              20,
+              MediaQuery.of(ctx2).viewInsets.bottom + 24,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 14),
+                    decoration: BoxDecoration(
+                      color: Colors.white24,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                const Row(
+                  children: [
+                    Icon(
+                      Icons.camera_alt_outlined,
+                      color: DRDTheme.primaryColor,
+                      size: 16,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      'Submit Evidence',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 15,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Location tagged automatically • ${auth.user?.teamName ?? ""}',
+                  style: const TextStyle(color: Colors.white38, fontSize: 11),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: noteCtrl,
+                  maxLength: 160,
+                  maxLines: 2,
+                  style: const TextStyle(color: Colors.white, fontSize: 13),
+                  decoration: InputDecoration(
+                    hintText: 'Optional note (max 160 chars)…',
+                    hintStyle: const TextStyle(color: Colors.white30),
+                    filled: true,
+                    fillColor: Colors.white.withValues(alpha: 0.06),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide.none,
+                    ),
+                    counterStyle: const TextStyle(
+                      color: Colors.white30,
+                      fontSize: 10,
+                    ),
+                    contentPadding: const EdgeInsets.symmetric(
+                      horizontal: 12,
+                      vertical: 10,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: _evidencePickerBtn(
+                        Icons.camera_alt,
+                        'Camera',
+                        DRDTheme.primaryColor,
+                        () => Navigator.pop(ctx, 'camera::${noteCtrl.text}'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _evidencePickerBtn(
+                        Icons.photo_library_outlined,
+                        'Gallery',
+                        DRDTheme.accentColor,
+                        () => Navigator.pop(ctx, 'gallery::${noteCtrl.text}'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: _evidencePickerBtn(
+                        Icons.close,
+                        'Cancel',
+                        Colors.white38,
+                        () => Navigator.pop(ctx, null),
+                      ),
+                    ),
+                  ],
+                ),
               ],
             ),
           ),
         );
       },
     );
+
+    if (pick == null || !mounted) return;
+    final parts = pick.split('::');
+    final sourceKey = parts[0];
+    final note = parts.length > 1 ? parts[1] : '';
+
+    final source = sourceKey == 'camera'
+        ? ImageSource.camera
+        : ImageSource.gallery;
+    final perm = source == ImageSource.camera
+        ? Permission.camera
+        : Permission.photos;
+    if (await perm.isDenied) await perm.request();
+    if (!mounted) return;
+
+    final image = await ImagePicker().pickImage(
+      source: source,
+      imageQuality: 75,
+      maxWidth: 1280,
+    );
+    if (image == null || !mounted) return;
+
+    final caption = note.isNotEmpty
+        ? '$note [${loc.latitude.toStringAsFixed(5)},${loc.longitude.toStringAsFixed(5)}]'
+        : '[${loc.latitude.toStringAsFixed(5)},${loc.longitude.toStringAsFixed(5)}]';
+
+    _showSnack('Uploading evidence…', color: DRDTheme.primaryColor);
+    final url = await _uploadImageAsEvidence(image: image, caption: caption);
+    if (!mounted) return;
+    if (url != null) {
+      _showSnack('Evidence submitted ✓', color: DRDTheme.successColor);
+    } else {
+      _showSnack(
+        'Upload failed — check connection',
+        color: DRDTheme.dangerColor,
+      );
+    }
   }
 
   Widget _buildNavFabs(LocationProvider loc, LatLng myPos) {
@@ -3626,361 +4727,33 @@ class _TacticalMapScreenState extends State<TacticalMapScreen>
     );
   }
 
-  // ── Comms Tab ────────────────────────────────────────────────────────────────
-
-  Widget _buildImageMessage(String url) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(8),
-      child: GestureDetector(
-        onTap: () => _showFullImage(url),
-        child: Image.network(
-          url,
-          width: 200,
-          fit: BoxFit.cover,
-          loadingBuilder: (ctx, child, progress) {
-            if (progress == null) return child;
-            return Container(
-              width: 200,
-              height: 120,
-              decoration: BoxDecoration(
-                color: DRDTheme.backgroundColor,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Center(
-                child: CircularProgressIndicator(
-                  value: progress.expectedTotalBytes != null
-                      ? progress.cumulativeBytesLoaded /
-                            progress.expectedTotalBytes!
-                      : null,
-                  color: DRDTheme.primaryColor,
-                  strokeWidth: 2,
-                ),
-              ),
-            );
-          },
-          errorBuilder: (ctx, err, stack) => Container(
-            width: 200,
-            height: 80,
-            decoration: BoxDecoration(
-              color: DRDTheme.backgroundColor,
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white12),
-            ),
-            child: const Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  Icons.broken_image_outlined,
-                  color: Colors.white38,
-                  size: 28,
-                ),
-                SizedBox(height: 4),
-                Text(
-                  'Image unavailable',
-                  style: TextStyle(color: Colors.white38, fontSize: 10),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  void _showFullImage(String url) {
-    showDialog(
-      context: context,
-      builder: (ctx) => GestureDetector(
-        onTap: () => Navigator.pop(ctx),
-        child: Scaffold(
-          backgroundColor: Colors.black87,
-          body: Stack(
-            children: [
-              Center(
-                child: InteractiveViewer(
-                  child: Image.network(
-                    url,
-                    fit: BoxFit.contain,
-                    errorBuilder: (_, err, stack) => const Icon(
-                      Icons.broken_image_outlined,
-                      color: Colors.white38,
-                      size: 48,
-                    ),
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 48,
-                right: 16,
-                child: GestureDetector(
-                  onTap: () => Navigator.pop(ctx),
-                  child: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close,
-                      color: Colors.white,
-                      size: 20,
-                    ),
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
   Widget _buildCommsTab(AuthProvider auth) {
     final myId = auth.user?.id ?? '';
-    return Column(
-      children: [
-        // Messages list
-        Expanded(
-          child: _messages.isEmpty
-              ? const Center(
-                  child: Text(
-                    'No messages',
-                    style: TextStyle(color: Colors.white38, fontSize: 12),
-                  ),
-                )
-              : ListView.builder(
-                  controller: _msgScroll,
-                  reverse: false,
-                  padding: const EdgeInsets.fromLTRB(10, 4, 10, 4),
-                  itemCount: _messages.length,
-                  itemBuilder: (_, i) {
-                    final msg = _messages[i];
-                    final fromMe = msg['from_user_id'] == myId;
-                    final content = msg['content'] as String? ?? '';
-                    final sender =
-                        msg['from_user_name'] as String? ?? 'Unknown';
-                    final priority = msg['priority'] as String? ?? 'normal';
-                    final priorityColor =
-                        {
-                          'urgent': DRDTheme.dangerColor,
-                          'high': DRDTheme.warningColor,
-                          'normal': Colors.white54,
-                          'low': Colors.white30,
-                        }[priority] ??
-                        Colors.white54;
-
-                    final senderInitials = sender
-                        .split(' ')
-                        .where((w) => w.isNotEmpty)
-                        .take(2)
-                        .map((w) => w[0].toUpperCase())
-                        .join();
-
-                    return Padding(
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.end,
-                        mainAxisAlignment: fromMe
-                            ? MainAxisAlignment.end
-                            : MainAxisAlignment.start,
-                        children: [
-                          // Avatar (left side for others)
-                          if (!fromMe) ...[
-                            Container(
-                              width: 26,
-                              height: 26,
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: DRDTheme.primaryColor,
-                              ),
-                              child: Center(
-                                child: Text(
-                                  senderInitials,
-                                  style: const TextStyle(
-                                    color: Colors.white,
-                                    fontSize: 9,
-                                    fontWeight: FontWeight.w800,
-                                  ),
-                                ),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                          ],
-                          Flexible(
-                            child: Container(
-                              padding: const EdgeInsets.fromLTRB(10, 7, 10, 7),
-                              decoration: BoxDecoration(
-                                color: fromMe
-                                    ? DRDTheme.primaryColor.withValues(
-                                        alpha: 0.25,
-                                      )
-                                    : DRDTheme.backgroundColor.withValues(
-                                        alpha: 0.7,
-                                      ),
-                                borderRadius: BorderRadius.circular(10),
-                                border: Border.all(
-                                  color: fromMe
-                                      ? DRDTheme.primaryColor.withValues(
-                                          alpha: 0.4,
-                                        )
-                                      : Colors.white.withValues(alpha: 0.08),
-                                ),
-                              ),
-                              child: Column(
-                                crossAxisAlignment: fromMe
-                                    ? CrossAxisAlignment.end
-                                    : CrossAxisAlignment.start,
-                                children: [
-                                  if (!fromMe)
-                                    Text(
-                                      sender,
-                                      style: TextStyle(
-                                        color: DRDTheme.primaryColor.withValues(
-                                          alpha: 0.9,
-                                        ),
-                                        fontSize: 9,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    ),
-                                  if (!fromMe) const SizedBox(height: 2),
-                                  // Image message
-                                  if (content.startsWith('[evidence_image]'))
-                                    _buildImageMessage(
-                                      content.replaceFirst(
-                                        '[evidence_image]',
-                                        '',
-                                      ),
-                                    )
-                                  else
-                                    Text(
-                                      content,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontSize: 12,
-                                      ),
-                                    ),
-                                  if (priority != 'normal') ...[
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      priority.toUpperCase(),
-                                      style: TextStyle(
-                                        color: priorityColor,
-                                        fontSize: 8,
-                                        fontWeight: FontWeight.bold,
-                                        letterSpacing: 0.8,
-                                      ),
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          ),
-                        ],
-                      ),
-                    );
-                  },
-                ),
-        ),
-        // Send bar – SafeArea prevents overlap with system nav bar
-        SafeArea(
-          top: false,
-          child: Container(
-            padding: const EdgeInsets.fromLTRB(10, 6, 10, 10),
-            decoration: BoxDecoration(
-              border: Border(
-                top: BorderSide(color: Colors.white.withValues(alpha: 0.08)),
-              ),
-            ),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _msgCtrl,
-                    style: const TextStyle(color: Colors.white, fontSize: 12),
-                    decoration: InputDecoration(
-                      hintText: 'Message unit / command…',
-                      hintStyle: const TextStyle(
-                        color: Colors.white30,
-                        fontSize: 12,
-                      ),
-                      filled: true,
-                      fillColor: DRDTheme.backgroundColor.withValues(
-                        alpha: 0.5,
-                      ),
-                      contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 12,
-                        vertical: 8,
-                      ),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1),
-                        ),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: Colors.white.withValues(alpha: 0.1),
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                          color: DRDTheme.primaryColor,
-                        ),
-                      ),
-                    ),
-                    onSubmitted: (v) => _sendMessage(v),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                // Camera button
-                GestureDetector(
-                  onTap: _sending ? null : _pickAndSendChatImage,
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: DRDTheme.primaryColor.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: DRDTheme.primaryColor.withValues(alpha: 0.4),
-                      ),
-                    ),
-                    child: const Icon(
-                      Icons.camera_alt_outlined,
-                      color: DRDTheme.primaryColor,
-                      size: 18,
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 6),
-                // Send button
-                GestureDetector(
-                  onTap: () => _sendMessage(_msgCtrl.text),
-                  child: Container(
-                    width: 40,
-                    height: 40,
-                    decoration: BoxDecoration(
-                      color: _sending ? Colors.white10 : DRDTheme.primaryColor,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: _sending
-                        ? const Padding(
-                            padding: EdgeInsets.all(11),
-                            child: CircularProgressIndicator(
-                              color: Colors.white,
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : const Icon(Icons.send, color: Colors.white, size: 18),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ), // SafeArea
-      ],
+    final myTeamId = auth.user?.teamId;
+    final contacts = _teamLocations.where((l) => l['user_id'] != myId).toList();
+    return CommsScreen(
+      myId: myId,
+      myName: (auth.user?.fullName.isNotEmpty == true ? auth.user!.fullName : null) ?? auth.user?.username ?? 'Me',
+      myTeamId: myTeamId,
+      coordinatorId: _chatRecipientId,
+      coordinatorName: _chatRecipientLabel,
+      contacts: contacts,
+      messages: _messages,
+      sending: _sending,
+      onSend: (toUserId, toTeamId, toAll, content, priority) async {
+        if (!mounted) return;
+        setState(() => _sending = true);
+        try {
+          await _api.post('/messages', {
+            'to_all': toAll,
+            if (toUserId != null) 'to_user_id': toUserId,
+            if (toTeamId != null) 'to_team_id': toTeamId,
+            'content': content,
+            'priority': priority,
+          });
+        } catch (_) {}
+        if (mounted) setState(() => _sending = false);
+      },
     );
   }
 

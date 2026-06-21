@@ -24,6 +24,7 @@ class User(Base):
     full_name = Column(String(200))
     role = Column(SQLEnum(UserRole), default=UserRole.FIELD_UNIT)
     phone = Column(String(20))
+    profile_picture_url = Column(String(500), nullable=True)
     is_active = Column(Boolean, default=True)
     is_verified = Column(Boolean, default=False)
     last_login = Column(DateTime(timezone=True))

@@ -42,13 +42,29 @@ class _CommanderHomeState extends State<CommanderHome> {
         _apiService.get('/routes'),
         _apiService.get('/events/stats?days=1'),
         _apiService.get('/locations'),
+        _apiService.get('/users?role=field_unit&size=500'),
       ]);
 
       final users = results[0] as Map<String, dynamic>?;
       final teams = results[1] as List<dynamic>?;
       final routes = results[2] as List<dynamic>?;
       final eventStats = results[3] as Map<String, dynamic>?;
-      final locations = results[4] as List<dynamic>?;
+      final locs = (results[4] as List<dynamic>?)
+              ?.cast<Map<String, dynamic>>() ??
+          [];
+      final allUsersPage = results[5] as Map<String, dynamic>?;
+      final allFieldUnits =
+          (allUsersPage?['items'] as List?)?.cast<Map<String, dynamic>>() ?? [];
+
+      // Merge GPS records with all field units so status counts include
+      // soldiers who haven't sent a location update yet.
+      final merged = List<Map<String, dynamic>>.from(locs);
+      final seenIds = locs.map((l) => l['user_id'] as String?).toSet();
+      for (final u in allFieldUnits) {
+        final uid = u['id'] as String?;
+        if (uid == null || seenIds.contains(uid)) continue;
+        merged.add({'user_id': uid, 'status': 'offline'});
+      }
 
       if (mounted) {
         setState(() {
@@ -59,7 +75,7 @@ class _CommanderHomeState extends State<CommanderHome> {
                 routes?.where((r) => r['is_active'] == true).length ?? 0,
             'todayEvents': eventStats?['total_events'] ?? 0,
           };
-          _locations = List<Map<String, dynamic>>.from(locations ?? []);
+          _locations = merged;
           _isLoadingStats = false;
         });
       }
@@ -125,6 +141,11 @@ class _CommanderHomeState extends State<CommanderHome> {
                 ],
               );
             },
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_outlined),
+            onPressed: () => Navigator.pushNamed(context, '/settings'),
+            tooltip: 'Settings & Permissions',
           ),
           IconButton(
             icon: const Icon(Icons.logout),

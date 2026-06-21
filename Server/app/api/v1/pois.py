@@ -42,13 +42,13 @@ class POIResponse(BaseModel):
     poi_type: str
     latitude: float
     longitude: float
-    tactical_shape: str
-    status: str
+    tactical_shape: Optional[str] = "diamond"
+    status: Optional[str] = "active"
     created_by: Optional[UUID]
-    created_at: datetime
-    updated_at: datetime
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     visible_to_all: bool = False
-    
+
     class Config:
         from_attributes = True
 

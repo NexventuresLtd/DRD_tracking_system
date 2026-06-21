@@ -155,7 +155,7 @@ class LocationProvider extends ChangeNotifier {
 
     debugPrint('📍 Sending location: lat=$_latitude, lng=$_longitude');
 
-    final result = await _api.post('/locations', payload);
+    final result = await _api.post('/locations/', payload);
     if (result == null) {
       await _sync.enqueue(_userId!, payload);
       _pendingCount = await _sync.getPendingCount();
@@ -168,7 +168,7 @@ class LocationProvider extends ChangeNotifier {
   Future<void> _flushQueue() async {
     if (_userId == null) return;
     _pendingCount = await _sync.flush(
-      (payload) async => await _api.post('/locations', payload) != null,
+      (payload) async => await _api.post('/locations/', payload) != null,
     );
     notifyListeners();
   }

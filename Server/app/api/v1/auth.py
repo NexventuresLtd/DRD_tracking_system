@@ -1,19 +1,25 @@
 # app/api/v1/auth.py
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
+import uuid
+from pathlib import Path
 
 from app.database import get_db
 from app.schemas.auth import (
     UserRegister, UserLogin, TokenResponse,
-    RefreshToken, ForgotPassword, ResetPassword, ChangePassword
+    RefreshToken, ForgotPassword, ResetPassword, ChangePassword,
+    OtpVerify, OtpPendingResponse
 )
 from app.services.auth_service import AuthService
 from app.middleware.auth import get_current_user, security
 from app.models.user import User
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+AVATAR_DIR = Path("uploads/avatars")
+AVATAR_DIR.mkdir(parents=True, exist_ok=True)
 
 @router.post("/register", response_model=dict, status_code=status.HTTP_201_CREATED)
 async def register(
@@ -31,7 +37,7 @@ async def register(
         "username": user.username,
     }
 
-@router.post("/login", response_model=TokenResponse)
+@router.post("/login", response_model=TokenResponse | OtpPendingResponse)
 async def login(
     data: UserLogin,
     db: AsyncSession = Depends(get_db)
@@ -39,6 +45,16 @@ async def login(
     """Login and get access tokens"""
     auth_service = AuthService(db)
     return await auth_service.login(data)
+
+
+@router.post("/verify-otp", response_model=TokenResponse)
+async def verify_otp(
+    data: OtpVerify,
+    db: AsyncSession = Depends(get_db)
+):
+    """Verify OTP and exchange the session for tokens."""
+    auth_service = AuthService(db)
+    return await auth_service.verify_otp(data.session_id, data.otp)
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(
@@ -98,6 +114,7 @@ async def get_current_user_info(
         "full_name": user.full_name,
         "role": user.role.value,
         "phone": user.phone,
+        "profile_picture_url": user.profile_picture_url,
         "is_active": user.is_active,
         "is_verified": user.is_verified,
         "last_login": user.last_login.isoformat() if user.last_login else None,
@@ -106,6 +123,33 @@ async def get_current_user_info(
         "team_name": tm_row[1].name if tm_row else None,
         "team_role": tm_row[0].role if tm_row else None,
     }
+
+@router.post("/upload-avatar")
+async def upload_avatar(
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    request: Request = None,
+):
+    """Upload profile picture for current user"""
+    allowed = {"image/jpeg", "image/png", "image/webp", "image/gif"}
+    if file.content_type not in allowed:
+        raise HTTPException(status_code=400, detail="Only image files allowed")
+    content = await file.read()
+    if len(content) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File too large (max 5MB)")
+    ext = Path(file.filename or "avatar.jpg").suffix or ".jpg"
+    fname = f"{current_user.id}{ext}"
+    fpath = AVATAR_DIR / fname
+    with open(fpath, "wb") as f:
+        f.write(content)
+    # Build absolute URL
+    base = str(request.base_url).rstrip("/") if request else ""
+    url = f"{base}/uploads/avatars/{fname}"
+    current_user.profile_picture_url = url
+    db.add(current_user)
+    await db.commit()
+    return {"profile_picture_url": url}
 
 @router.put("/change-password")
 async def change_password(

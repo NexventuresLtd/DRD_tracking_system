@@ -12,6 +12,7 @@ import '../../widgets/status_indicator.dart';
 import 'field_map_screen.dart';
 import 'field_squad_view.dart';
 import 'live_feed_screen.dart';
+import 'mobile_comms_screen.dart';
 
 class FieldHome extends StatefulWidget {
   const FieldHome({super.key});
@@ -302,7 +303,7 @@ class _FieldHomeState extends State<FieldHome> with WidgetsBindingObserver {
                     } else if (index < 4) {
                       setState(() => _currentIndex = index);
                     } else if (index == 5) {
-                      setState(() => _currentIndex = 4);
+                      Navigator.push(context, MaterialPageRoute(builder: (_) => const MobileCommsScreen()));
                     } else if (index == 6) {
                       setState(() => _currentIndex = 5);
                     }

@@ -78,15 +78,45 @@ class _LoginScreenState extends State<LoginScreen>
   Future<void> _handleLogin() async {
     if (!_formKey.currentState!.validate()) return;
     final authProvider = Provider.of<AuthProvider>(context, listen: false);
-    final success = await authProvider.login(
+    final result = await authProvider.login(
       _usernameController.text.trim(),
       _passwordController.text,
     );
-    if (success && mounted) {
-      // Navigate immediately — let TacticalMapScreen._initTracking() handle GPS init
-      // in addPostFrameCallback so the map appears without the 5-second wait.
+    if (!mounted) return;
+    if (result == true) {
       Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
+    } else if (result == null) {
+      // OTP required — show OTP overlay
+      _showOtpSheet(authProvider);
     }
+    // false → error message shown via Consumer<AuthProvider>
+  }
+
+  void _showOtpSheet(AuthProvider authProvider) {
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0A1628),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => _OtpVerifySheet(
+        emailHint: authProvider.pendingEmailHint ?? '',
+        onVerify: (otp) async {
+          final ok = await authProvider.verifyOtp(otp);
+          if (!mounted) return;
+          if (ok) {
+            Navigator.of(context).pop(); // close sheet
+            Navigator.pushReplacementNamed(context, authProvider.getHomeRoute());
+          }
+          // error shown inside sheet via provider
+        },
+        onCancel: () {
+          authProvider.clearOtpState();
+          Navigator.of(context).pop();
+        },
+      ),
+    );
   }
 
   String _friendlyError(String? raw) {
@@ -365,6 +395,33 @@ class _LoginScreenState extends State<LoginScreen>
                                 ],
                               ),
                             ),
+
+                            const SizedBox(height: 16),
+
+                            // Create account button (free registration)
+                            GestureDetector(
+                              onTap: () => Navigator.pushNamed(context, '/register'),
+                              child: Container(
+                                width: double.infinity,
+                                height: 48,
+                                decoration: BoxDecoration(
+                                  color: Colors.transparent,
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.3)),
+                                ),
+                                child: const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.person_add_outlined, size: 16, color: DRDTheme.primaryColor),
+                                    SizedBox(width: 8),
+                                    Text(
+                                      'CREATE ACCOUNT',
+                                      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 2, color: DRDTheme.primaryColor, fontFamily: 'Poppins'),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
                           ],
                         ),
                       ),
@@ -421,6 +478,9 @@ class _LoginScreenState extends State<LoginScreen>
             child: TextFormField(
               controller: controller,
               obscureText: obscureText,
+              autocorrect: false,
+              enableSuggestions: false,
+              textCapitalization: TextCapitalization.none,
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 15,
@@ -531,6 +591,135 @@ class _LoginButtonState extends State<_LoginButton>
                   ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+
+// ── OTP verification bottom sheet ─────────────────────────────────────────
+class _OtpVerifySheet extends StatefulWidget {
+  final String emailHint;
+  final Future<void> Function(String otp) onVerify;
+  final VoidCallback onCancel;
+  const _OtpVerifySheet({required this.emailHint, required this.onVerify, required this.onCancel});
+
+  @override
+  State<_OtpVerifySheet> createState() => _OtpVerifySheetState();
+}
+
+class _OtpVerifySheetState extends State<_OtpVerifySheet> {
+  final _ctrl = TextEditingController();
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    if (_ctrl.text.trim().length < 6) return;
+    setState(() => _loading = true);
+    await widget.onVerify(_ctrl.text.trim());
+    if (mounted) setState(() => _loading = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.fromLTRB(24, 16, 24, 24 + MediaQuery.of(context).viewInsets.bottom),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Handle bar
+          Center(child: Container(
+            width: 40, height: 4,
+            decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(2)),
+          )),
+          const SizedBox(height: 20),
+
+          const Text('VERIFY YOUR IDENTITY',
+            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 14, letterSpacing: 2, fontFamily: 'Poppins')),
+          const SizedBox(height: 8),
+
+          Text('Code sent to ${widget.emailHint}',
+            style: const TextStyle(color: Colors.white54, fontSize: 12, fontFamily: 'Poppins')),
+          const SizedBox(height: 24),
+
+          // 6-digit input
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFF0A1628),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: DRDTheme.primaryColor.withValues(alpha: 0.4)),
+            ),
+            child: TextField(
+              controller: _ctrl,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.w900,
+                letterSpacing: 14, fontFamily: 'Poppins'),
+              decoration: const InputDecoration(
+                hintText: '000000',
+                hintStyle: TextStyle(color: Colors.white24, fontSize: 28, letterSpacing: 14, fontFamily: 'Poppins'),
+                border: InputBorder.none,
+                counterText: '',
+                contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 18),
+              ),
+              onChanged: (v) {
+                if (v.length == 6) _submit();
+              },
+            ),
+          ),
+          const SizedBox(height: 8),
+          const Text('Auto-submits at 6 digits · expires in 10 min',
+            style: TextStyle(color: Colors.white24, fontSize: 10, fontFamily: 'Poppins')),
+
+          // Error from provider
+          Consumer<AuthProvider>(
+            builder: (context, auth, _) {
+              if (auth.errorMessage == null) return const SizedBox(height: 8);
+              return Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: DRDTheme.dangerColor.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: DRDTheme.dangerColor.withValues(alpha: 0.3)),
+                  ),
+                  child: Text(auth.errorMessage!,
+                    style: const TextStyle(color: DRDTheme.dangerColor, fontSize: 11, fontFamily: 'Poppins')),
+                ),
+              );
+            },
+          ),
+          const SizedBox(height: 20),
+
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: ElevatedButton(
+              onPressed: _loading || _ctrl.text.length < 6 ? null : _submit,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: DRDTheme.primaryColor,
+                disabledBackgroundColor: DRDTheme.primaryColor.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+              child: _loading
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                : const Text('VERIFY & ACCESS', style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, letterSpacing: 2, fontFamily: 'Poppins')),
+            ),
+          ),
+          const SizedBox(height: 12),
+          TextButton(
+            onPressed: widget.onCancel,
+            child: const Text('Cancel', style: TextStyle(color: Colors.white38, fontSize: 12, fontFamily: 'Poppins')),
+          ),
+        ],
       ),
     );
   }

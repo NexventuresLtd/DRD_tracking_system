@@ -57,24 +57,15 @@ async def list_messages(
     db: AsyncSession = Depends(get_db)
 ):
     """List messages for current user"""
-    # Messages where user is recipient or sender
-    query = select(Message).where(
-        or_(
-            Message.to_user_id == current_user.id,
-            Message.from_user_id == current_user.id,
-            Message.to_all == True,
-            # Messages to user's teams
-            Message.to_team_id.in_(
-                select(TeamMember.team_id).where(
-                    TeamMember.user_id == current_user.id,
-                    TeamMember.is_active == True,
-                )
-            ),
-        )
-    )
-    
-    count_query = select(func.count(Message.id)).where(
-        or_(
+    # Commanders and operators see ALL messages (they oversee everyone).
+    # Field units only see messages involving themselves or their teams.
+    is_supervisor = current_user.role.value in ("admin", "commander", "operator")
+
+    if is_supervisor:
+        query = select(Message)
+        count_query = select(func.count(Message.id))
+    else:
+        recipient_clause = or_(
             Message.to_user_id == current_user.id,
             Message.from_user_id == current_user.id,
             Message.to_all == True,
@@ -85,30 +76,40 @@ async def list_messages(
                 )
             ),
         )
-    )
-    
+        query = select(Message).where(recipient_clause)
+        count_query = select(func.count(Message.id)).where(recipient_clause)
+
     if is_read is not None:
         query = query.where(Message.is_read == is_read)
         count_query = count_query.where(Message.is_read == is_read)
-    
+
     if priority:
         query = query.where(Message.priority == priority)
         count_query = count_query.where(Message.priority == priority)
-    
-    # Get unread count
-    unread_query = select(func.count(Message.id)).where(
-        or_(
-            Message.to_user_id == current_user.id,
-            Message.to_all == True,
-            Message.to_team_id.in_(
-                select(TeamMember.team_id).where(
-                    TeamMember.user_id == current_user.id,
-                    TeamMember.is_active == True,
-                )
+
+    # Get unread count (messages addressed to me that I haven't read)
+    if is_supervisor:
+        unread_query = select(func.count(Message.id)).where(
+            or_(
+                Message.to_user_id == current_user.id,
+                Message.to_all == True,
             ),
-        ),
-        Message.is_read == False,
-    )
+            Message.is_read == False,
+        )
+    else:
+        unread_query = select(func.count(Message.id)).where(
+            or_(
+                Message.to_user_id == current_user.id,
+                Message.to_all == True,
+                Message.to_team_id.in_(
+                    select(TeamMember.team_id).where(
+                        TeamMember.user_id == current_user.id,
+                        TeamMember.is_active == True,
+                    )
+                ),
+            ),
+            Message.is_read == False,
+        )
     unread_result = await db.execute(unread_query)
     unread_count = unread_result.scalar()
     
@@ -196,15 +197,10 @@ async def send_message(
                 "created_at": message.created_at.isoformat(),
             },
         }
-        if message.to_all:
-            asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
-        elif message.to_team_id:
-            asyncio.create_task(manager.broadcast_to_team(str(message.to_team_id), broadcast_payload))
-        elif message.to_user_id:
-            asyncio.create_task(manager.send_personal_message(broadcast_payload, str(message.to_user_id)))
-            asyncio.create_task(manager.send_personal_message(broadcast_payload, str(message.from_user_id)))
-        else:
-            asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
+        # Always broadcast to all — commanders/operators need to see every message.
+        # For personal DMs the client filters by fromId/toId; for team messages commanders
+        # must still receive them since they're not in team_subscriptions on the message WS.
+        asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
     except Exception:
         pass
 

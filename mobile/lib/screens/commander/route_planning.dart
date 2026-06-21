@@ -45,6 +45,17 @@ class _RoutePlanningState extends State<RoutePlanning> {
       _locProvider = context.read<LocationProvider>();
       _locProvider!.addListener(_autoCenter);
       _autoCenter();
+
+      // Pre-seed first waypoint when navigating from a soldier's position
+      final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+      if (args != null) {
+        final lat = (args['start_lat'] as num?)?.toDouble();
+        final lng = (args['start_lng'] as num?)?.toDouble();
+        if (lat != null && lng != null) {
+          setState(() => _pendingWaypoints = [LatLng(lat, lng)]);
+          if (_mapReady) _mapCtrl.move(LatLng(lat, lng), 15);
+        }
+      }
     });
   }
 

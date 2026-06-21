@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { useState, useEffect } from "react";
 import DODMap from "./Pages/DODMap";
 import Login from "./Pages/Login";
+import FieldUserView from "./Pages/FieldUserView";
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const token = localStorage.getItem("access_token");
@@ -95,6 +96,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <DODMap />
+            </ProtectedRoute>
+          }
+        />
+        <Route
+          path="/field"
+          element={
+            <ProtectedRoute>
+              <FieldUserView />
             </ProtectedRoute>
           }
         />

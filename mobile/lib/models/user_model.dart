@@ -9,6 +9,7 @@ class UserModel {
   final String? teamName;
   final String? teamRole;
   final bool isActive;
+  final String? profilePictureUrl;
 
   UserModel({
     required this.id,
@@ -21,6 +22,7 @@ class UserModel {
     this.teamName,
     this.teamRole,
     this.isActive = true,
+    this.profilePictureUrl,
   });
 
   factory UserModel.fromJson(Map<String, dynamic> json) {
@@ -35,6 +37,7 @@ class UserModel {
       teamName: json['team_name'],
       teamRole: json['team_role'],
       isActive: json['is_active'] ?? true,
+      profilePictureUrl: json['profile_picture_url'] as String?,
     );
   }
 
@@ -50,6 +53,7 @@ class UserModel {
       'team_name': teamName,
       'team_role': teamRole,
       'is_active': isActive,
+      'profile_picture_url': profilePictureUrl,
     };
   }
 
@@ -57,5 +61,7 @@ class UserModel {
   bool get isCommander => isAdmin || role == 'commander';
   bool get isOperator => isCommander || role == 'operator';
   bool get isFieldUnit => role == 'field_unit';
+  bool get isTeamLead =>
+      teamRole == 'lead' || role == 'commander' || role == 'admin';
   bool get isViewer => role == 'viewer';
 }

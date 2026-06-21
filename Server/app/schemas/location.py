@@ -48,9 +48,9 @@ class LocationResponse(BaseModel):
     gyro_y: Optional[float]
     gyro_z: Optional[float]
     battery_level: Optional[int]
-    status: str
+    status: Optional[str] = "active"
     recorded_at: datetime
-    created_at: datetime
+    created_at: Optional[datetime] = None
     name: Optional[str] = None
     team_name: Optional[str] = None
 

@@ -11,6 +11,7 @@ class UserRegister(BaseModel):
     full_name: str = Field(..., min_length=2, max_length=200)
     phone: Optional[str] = None
     role: Optional[str] = "field_unit"
+    invite_token: Optional[str] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -42,3 +43,13 @@ class TokenPayload(BaseModel):
     exp: datetime
     type: str
     role: str
+
+class OtpVerify(BaseModel):
+    session_id: str
+    otp: str
+
+class OtpPendingResponse(BaseModel):
+    status: str = "otp_required"
+    session_id: str
+    email_hint: str
+    message: str = "A verification code has been sent to your email."

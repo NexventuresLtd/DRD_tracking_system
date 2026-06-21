@@ -16,6 +16,7 @@ class Route(Base):
     assigned_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
     color = Column(String(7), default="#3b82f6")
     is_active = Column(Boolean, default=True)
+    proposed_status = Column(String(20), nullable=False, default="approved", server_default="approved")
     is_zone = Column(Boolean, default=False)
     zone_type = Column(String(50))
     meeting_point = Column(Boolean, default=False)

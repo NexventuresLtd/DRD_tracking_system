@@ -26,12 +26,13 @@ class UserResponse(UserBase):
     id: UUID
     is_active: bool
     is_verified: bool
+    profile_picture_url: Optional[str] = None
     last_login: Optional[datetime]
     created_at: datetime
     updated_at: datetime
     team: Optional[dict] = None
     team_role: Optional[str] = None
-    
+
     class Config:
         from_attributes = True
 

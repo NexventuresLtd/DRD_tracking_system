@@ -222,6 +222,40 @@ class LocationService:
         )
         return result.scalar_one_or_none()
     
+    async def get_historical_snapshot(
+        self,
+        team_id: Optional[UUID] = None,
+        start_time: Optional[datetime] = None,
+        end_time: Optional[datetime] = None,
+    ) -> List[LocationHistory]:
+        """Return the last recorded position of every user within a time window.
+        Used by the commander date-range view to see where each soldier was."""
+        # Subquery: latest recorded_at per user within the window
+        sub = select(
+            LocationHistory.user_id,
+            func.max(LocationHistory.recorded_at).label("max_recorded_at"),
+        )
+        if team_id:
+            sub = sub.where(LocationHistory.team_id == team_id)
+        if start_time:
+            sub = sub.where(LocationHistory.recorded_at >= start_time)
+        if end_time:
+            sub = sub.where(LocationHistory.recorded_at <= end_time)
+        sub = sub.group_by(LocationHistory.user_id).subquery()
+
+        query = (
+            select(LocationHistory)
+            .join(
+                sub,
+                and_(
+                    LocationHistory.user_id == sub.c.user_id,
+                    LocationHistory.recorded_at == sub.c.max_recorded_at,
+                ),
+            )
+        )
+        result = await self.db.execute(query)
+        return result.scalars().all()
+
     async def get_location_history(
         self,
         user_id: UUID,
@@ -272,19 +306,43 @@ class LocationService:
     async def update_location_statuses(self):
         """Update status of all locations based on last update time"""
         now = datetime.now(timezone.utc)
-        
+
         # Get all locations
         result = await self.db.execute(select(Location))
         locations = result.scalars().all()
-        
+
+        changed: list[dict] = []
         for location in locations:
-            time_diff = (now - location.recorded_at).total_seconds()
-            
+            try:
+                rec = location.recorded_at
+                if rec.tzinfo is None:
+                    rec = rec.replace(tzinfo=timezone.utc)
+                time_diff = (now - rec).total_seconds()
+            except Exception:
+                time_diff = 9999
+
+            old_status = location.status
             if time_diff > 90:
                 location.status = "offline"
             elif time_diff > 30:
                 location.status = "stale"
             else:
                 location.status = "active"
-        
+
+            if location.status != old_status:
+                changed.append({
+                    "user_id": str(location.user_id),
+                    "latitude": location.latitude,
+                    "longitude": location.longitude,
+                    "status": location.status,
+                    "recorded_at": location.recorded_at.isoformat() if location.recorded_at else None,
+                })
+
         await self.db.commit()
+
+        # Broadcast status changes so dashboards update in real-time without polling
+        for data in changed:
+            try:
+                await manager.broadcast_location_update(data)
+            except Exception:
+                pass

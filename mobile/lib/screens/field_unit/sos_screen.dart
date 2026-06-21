@@ -19,6 +19,25 @@ class _SOSScreenState extends State<SOSScreen> {
   bool _sosActive = false;
   String _selectedType = 'help';
 
+  Future<void> _cancelSOS() async {
+    final auth = context.read<AuthProvider>();
+    setState(() => _isSending = true);
+    try {
+      await _api.post('/events', {
+        'event_type': 'FLAG',
+        'user_id': auth.user?.id,
+        'description': 'SOS cancelled by field unit — ${auth.user?.fullName ?? "Field Unit"}',
+        'severity': 'low',
+        'event_metadata': {'sos_cancel': true},
+      });
+    } catch (_) {}
+    if (!mounted) return;
+    setState(() { _isSending = false; _sosActive = false; });
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('SOS cancelled.'), backgroundColor: DRDTheme.warningColor),
+    );
+  }
+
   Future<void> _sendSOS() async {
     final auth = context.read<AuthProvider>();
     final loc = context.read<LocationProvider>();
@@ -206,6 +225,22 @@ class _SOSScreenState extends State<SOSScreen> {
                       ),
               ),
             ),
+            if (_sosActive) ...[
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                height: 52,
+                child: OutlinedButton(
+                  onPressed: _isSending ? null : _cancelSOS,
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: DRDTheme.dangerColor,
+                    side: const BorderSide(color: DRDTheme.dangerColor, width: 2),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  child: const Text('CANCEL SOS', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 2)),
+                ),
+              ),
+            ],
           ],
         ),
       ),

@@ -102,6 +102,35 @@ async def get_evidence_file(evidence_id: str, db: AsyncSession = Depends(get_db)
     return FileResponse(ev.file_path, media_type=ev.mime_type, filename=ev.file_name)
 
 
+@router.get("/all")
+async def list_all_evidence(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return all evidence entries, newest first. Accessible to operators and above."""
+    allowed = {"operator", "admin", "commander", "super_admin"}
+    if current_user.role not in allowed:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    result = await db.execute(select(Evidence).order_by(Evidence.created_at.desc()).limit(200))
+    items = result.scalars().all()
+    base = str(request.base_url).rstrip('/')
+    return [
+        {
+            "id": str(e.id),
+            "url": f"{base}/api/v1/evidence/{e.id}/file",
+            "file_name": e.file_name,
+            "caption": e.caption,
+            "file_size": e.file_size,
+            "poi_id": str(e.poi_id) if e.poi_id else None,
+            "message_id": str(e.message_id) if e.message_id else None,
+            "uploaded_by": str(e.uploaded_by) if e.uploaded_by else None,
+            "created_at": e.created_at.isoformat(),
+        }
+        for e in items
+    ]
+
+
 @router.get("/poi/{poi_id}")
 async def get_poi_evidence(
     request: Request,

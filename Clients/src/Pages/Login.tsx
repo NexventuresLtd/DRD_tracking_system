@@ -34,6 +34,13 @@ export default function Login() {
   const [error, setError] = useState("");
   const [idFocused, setIdFocused] = useState(false);
   const [pwFocused, setPwFocused] = useState(false);
+
+  // OTP step
+  const [step, setStep] = useState<"credentials" | "otp">("credentials");
+  const [sessionId, setSessionId] = useState("");
+  const [emailHint, setEmailHint] = useState("");
+  const [otp, setOtp] = useState("");
+
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -42,14 +49,39 @@ export default function Login() {
     setLoading(true);
     try {
       const { data } = await api.login(identifier, password);
+      if (data.status === "otp_required") {
+        setSessionId(data.session_id);
+        setEmailHint(data.email_hint);
+        setStep("otp");
+      } else {
+        localStorage.setItem("access_token", data.access_token);
+        if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
+        navigate("/");
+      }
+    } catch (err: unknown) {
+      const raw =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
+        "Authentication failed.";
+      setError(getErrorMessage(String(raw)));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOtpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError("");
+    setLoading(true);
+    try {
+      const { data } = await api.verifyOtp(sessionId, otp.trim());
       localStorage.setItem("access_token", data.access_token);
       if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
       navigate("/");
     } catch (err: unknown) {
       const raw =
         (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        "Authentication failed.";
-      setError(getErrorMessage(String(raw)));
+        "Verification failed.";
+      setError(String(raw));
     } finally {
       setLoading(false);
     }
@@ -242,99 +274,153 @@ export default function Login() {
                 )}
               </AnimatePresence>
 
-              <form onSubmit={handleSubmit} className="space-y-7">
-                {/* Identifier */}
-                <div>
-                  <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
-                    USERNAME
-                  </label>
-                  <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${idFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'
-                    }`}>
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2">
-                      <FiUser size={18} className={idFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
-                    </span>
-                    <input
-                      type="text"
-                      value={identifier}
-                      onChange={e => setIdentifier(e.target.value)}
-                      onFocus={() => setIdFocused(true)}
-                      onBlur={() => setIdFocused(false)}
-                      required
-                      autoComplete="username"
-                      placeholder="commander.alpha or user@drd.mil"
-                      className="w-full pl-12 pr-5 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
-                    />
-                  </div>
-                </div>
-
-                {/* Password */}
-                <div>
-                  <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
-                    ACCESS CODE
-                  </label>
-                  <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${pwFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'
-                    }`}>
-                    <span className="absolute left-4 top-1/2 -translate-y-1/2">
-                      <FiLock size={18} className={pwFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
-                    </span>
-                    <input
-                      type={showPass ? "text" : "password"}
-                      value={password}
-                      onChange={e => setPassword(e.target.value)}
-                      onFocus={() => setPwFocused(true)}
-                      onBlur={() => setPwFocused(false)}
-                      required
-                      autoComplete="current-password"
-                      placeholder="••••••••••"
-                      className="w-full pl-12 pr-12 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowPass(v => !v)}
-                      tabIndex={-1}
-                      className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                    >
-                      {showPass ? <FiEyeOff size={18} className="text-blue-900 font-bold" /> : <FiEye size={18} className="text-blue-700 font-bold" />}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Submit button */}
-                <motion.button
-                  type="submit"
-                  disabled={loading || !identifier || !password}
-                  className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4 relative overflow-hidden transition-all duration-300"
-                  style={{
-                    background: loading || !identifier || !password
-                      ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
-                      : 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                    cursor: loading || !identifier || !password ? "not-allowed" : "pointer",
-                  }}
-                  whileHover={{
-                    scale: loading || !identifier || !password ? 1 : 1.02,
-                    boxShadow: loading || !identifier || !password
-                      ? 'none'
-                      : '0 10px 40px -10px rgba(59,130,246,0.4)'
-                  }}
-                  whileTap={{ scale: 0.98 }}
-                >
-                  {loading ? (
-                    <>
-                      <motion.span
-                        className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
-                        animate={{ rotate: 360 }}
-                        transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+              {step === "credentials" ? (
+                <form onSubmit={handleSubmit} className="space-y-7">
+                  {/* Identifier */}
+                  <div>
+                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
+                      USERNAME
+                    </label>
+                    <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${idFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'}`}>
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2">
+                        <FiUser size={18} className={idFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
+                      </span>
+                      <input
+                        type="text"
+                        value={identifier}
+                        onChange={e => setIdentifier(e.target.value)}
+                        onFocus={() => setIdFocused(true)}
+                        onBlur={() => setIdFocused(false)}
+                        required
+                        autoComplete="username"
+                        placeholder="commander.alpha or user@drd.mil"
+                        className="w-full pl-12 pr-5 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
                       />
-                      <span>AUTHENTICATING...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>AUTHENTICATE</span>
-                      <FiArrowRight size={18} />
-                    </>
-                  )}
-                </motion.button>
-              </form>
+                    </div>
+                  </div>
+
+                  {/* Password */}
+                  <div>
+                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
+                      ACCESS CODE
+                    </label>
+                    <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${pwFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'}`}>
+                      <span className="absolute left-4 top-1/2 -translate-y-1/2">
+                        <FiLock size={18} className={pwFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
+                      </span>
+                      <input
+                        type={showPass ? "text" : "password"}
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        onFocus={() => setPwFocused(true)}
+                        onBlur={() => setPwFocused(false)}
+                        required
+                        autoComplete="current-password"
+                        placeholder="••••••••••"
+                        className="w-full pl-12 pr-12 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowPass(v => !v)}
+                        tabIndex={-1}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
+                      >
+                        {showPass ? <FiEyeOff size={18} className="text-blue-900 font-bold" /> : <FiEye size={18} className="text-blue-700 font-bold" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Submit button */}
+                  <motion.button
+                    type="submit"
+                    disabled={loading || !identifier || !password}
+                    className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4 relative overflow-hidden transition-all duration-300"
+                    style={{
+                      background: loading || !identifier || !password
+                        ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
+                        : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                      cursor: loading || !identifier || !password ? "not-allowed" : "pointer",
+                    }}
+                    whileHover={{ scale: loading || !identifier || !password ? 1 : 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    {loading ? (
+                      <>
+                        <motion.span
+                          className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
+                        />
+                        <span>AUTHENTICATING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>AUTHENTICATE</span>
+                        <FiArrowRight size={18} />
+                      </>
+                    )}
+                  </motion.button>
+                </form>
+              ) : (
+                /* ── OTP verification step ── */
+                <form onSubmit={handleOtpSubmit} className="space-y-6">
+                  <div className="rounded-2xl px-5 py-4 text-center"
+                    style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)" }}>
+                    <div className="text-[10px] font-bold tracking-[2px] text-blue-400 mb-1">VERIFICATION CODE SENT</div>
+                    <div className="text-xs text-slate-400">Check email: <span className="text-white font-semibold">{emailHint}</span></div>
+                  </div>
+
+                  <div>
+                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
+                      6-DIGIT CODE
+                    </label>
+                    <div className="relative rounded-2xl overflow-hidden ring-1 ring-white/[0.08] focus-within:ring-2 focus-within:ring-blue-500/50 transition-all duration-300">
+                      <input
+                        type="text"
+                        value={otp}
+                        onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                        required
+                        autoFocus
+                        maxLength={6}
+                        placeholder="000000"
+                        className="w-full px-5 py-5 bg-slate-800/50 text-white text-2xl font-black tracking-[0.4em] text-center placeholder:text-white/20 outline-none"
+                      />
+                    </div>
+                    <p className="mt-2 text-[10px] text-slate-500 text-center">Code expires in 10 minutes</p>
+                  </div>
+
+                  <motion.button
+                    type="submit"
+                    disabled={loading || otp.length < 6}
+                    className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4"
+                    style={{
+                      background: loading || otp.length < 6
+                        ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
+                        : 'linear-gradient(135deg, #3b82f6, #2563eb)',
+                      cursor: loading || otp.length < 6 ? "not-allowed" : "pointer",
+                    }}
+                    whileTap={{ scale: 0.98 }}
+                  >
+                    {loading ? (
+                      <>
+                        <motion.span className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
+                          animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }} />
+                        <span>VERIFYING...</span>
+                      </>
+                    ) : (
+                      <>
+                        <span>VERIFY & ACCESS</span>
+                        <FiArrowRight size={18} />
+                      </>
+                    )}
+                  </motion.button>
+
+                  <button type="button" onClick={() => { setStep("credentials"); setError(""); setOtp(""); }}
+                    className="w-full text-[11px] text-slate-500 hover:text-slate-300 transition-colors bg-transparent border-none cursor-pointer">
+                    ← Back to login
+                  </button>
+                </form>
+              )}
 
               {/* Footer */}
               <div className="mt-8 pt-6 flex items-center justify-center gap-3 border-t border-white/[0.06]">

@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.models.event import Event
-from app.models.team import Team
+from app.models.team import Team, TeamMember
 from app.middleware.auth import get_current_user
 from app.websocket.manager import manager
 import asyncio
@@ -33,10 +33,10 @@ class EventResponse(BaseModel):
     description: str
     location_lat: Optional[float]
     location_lng: Optional[float]
-    event_metadata: Optional[dict]  # Changed from metadata
-    severity: str
-    created_at: datetime
-    
+    event_metadata: Optional[dict]
+    severity: Optional[str] = "low"
+    created_at: Optional[datetime] = None
+
     class Config:
         from_attributes = True
 
@@ -47,6 +47,20 @@ class EventListResponse(BaseModel):
     size: int
 
 router = APIRouter(prefix="/events", tags=["Events"])
+
+ELEVATED_ROLES = {UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.COMMANDER, UserRole.OPERATOR}
+
+
+async def _field_unit_team_scope(user_id, db: AsyncSession):
+    """Return (team_id, is_lead) for a field_unit from TeamMember table."""
+    result = await db.execute(
+        select(TeamMember).where(TeamMember.user_id == user_id, TeamMember.is_active == True)
+    )
+    member = result.scalar_one_or_none()
+    if member:
+        return member.team_id, member.role == "lead"
+    return None, False
+
 
 @router.get("/", response_model=EventListResponse)
 async def list_events(
@@ -61,30 +75,46 @@ async def list_events(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """List events with filters"""
+    """List events with filters.
+
+    Role-scoped:
+    - Operator and above: all events
+    - Field unit (team lead): events for their team or themselves
+    - Field unit (plain): only their own events
+    """
     query = select(Event)
     count_query = select(func.count(Event.id))
-    
+
+    # Apply role-based scope before user-supplied filters
+    if current_user.role not in ELEVATED_ROLES:
+        member_team_id, is_lead = await _field_unit_team_scope(current_user.id, db)
+        if is_lead and member_team_id:
+            scope_filter = or_(Event.team_id == member_team_id, Event.user_id == current_user.id)
+        else:
+            scope_filter = Event.user_id == current_user.id
+        query = query.where(scope_filter)
+        count_query = count_query.where(scope_filter)
+
     if event_type:
         query = query.where(Event.event_type == event_type)
         count_query = count_query.where(Event.event_type == event_type)
-    
+
     if severity:
         query = query.where(Event.severity == severity)
         count_query = count_query.where(Event.severity == severity)
-    
+
     if team_id:
         query = query.where(Event.team_id == team_id)
         count_query = count_query.where(Event.team_id == team_id)
-    
+
     if user_id:
         query = query.where(Event.user_id == user_id)
         count_query = count_query.where(Event.user_id == user_id)
-    
+
     if start_time:
         query = query.where(Event.created_at >= start_time)
         count_query = count_query.where(Event.created_at >= start_time)
-    
+
     if end_time:
         query = query.where(Event.created_at <= end_time)
         count_query = count_query.where(Event.created_at <= end_time)

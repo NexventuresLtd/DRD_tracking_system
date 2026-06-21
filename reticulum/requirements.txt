@@ -1,0 +1,5 @@
+rns>=0.7.4
+aiohttp>=3.9.0
+websockets>=12.0
+msgpack>=1.0.7
+python-dotenv>=1.0.0

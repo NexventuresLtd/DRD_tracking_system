@@ -1,13 +1,15 @@
 # app/api/v1/locations.py
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime
 
 from app.database import get_db
-from app.models.user import User
-from app.models.team import Team
+from app.models.location import Location
+from app.models.user import User, UserRole
+from app.models.team import Team, TeamMember
 from app.schemas.location import (
     LocationCreate, LocationBatchCreate,
     LocationResponse, LocationHistoryResponse,
@@ -15,6 +17,8 @@ from app.schemas.location import (
 )
 from app.services.location_service import LocationService
 from app.middleware.auth import get_current_user, require_operator
+from app.websocket.manager import manager
+import asyncio
 
 router = APIRouter(prefix="/locations", tags=["Locations"])
 
@@ -35,6 +39,18 @@ async def mark_offline(
     if location:
         location.status = "offline"
         await db.commit()
+        # Broadcast status change so the web dashboard updates immediately
+        try:
+            asyncio.create_task(manager.broadcast_location_update({
+                "user_id": str(current_user.id),
+                "latitude": location.latitude,
+                "longitude": location.longitude,
+                "status": "offline",
+                "recorded_at": location.recorded_at.isoformat() if location.recorded_at else None,
+                "name": current_user.full_name or current_user.username,
+            }))
+        except Exception:
+            pass
     return {"status": "offline"}
 
 
@@ -112,19 +128,84 @@ async def batch_update_locations(
         for loc in locations
     ]
 
+async def _get_field_unit_team(user_id, db: AsyncSession):
+    """Return (team_id, is_lead) for a field_unit, or (None, False) if not in a team."""
+    result = await db.execute(
+        select(TeamMember).where(TeamMember.user_id == user_id, TeamMember.is_active == True)
+    )
+    member = result.scalar_one_or_none()
+    if member:
+        return member.team_id, member.role == "lead"
+    return None, False
+
+
 @router.get("/", response_model=List[LocationResponse])
 async def get_active_locations(
     team_id: Optional[UUID] = None,
+    start_time: Optional[datetime] = None,
+    end_time: Optional[datetime] = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Get all active locations"""
+    """Get active locations. When start_time/end_time are provided, returns the last
+    known position of each user within that historical window instead of live data.
+
+    Role-scoped:
+    - Operator and above: all locations
+    - Field unit (team lead): own team only
+    - Field unit (plain member): own location only
+    """
     location_service = LocationService(db)
-    locations = await location_service.get_active_locations(team_id=team_id)
+    own_only = False
+
+    if current_user.role == UserRole.FIELD_UNIT:
+        member_team_id, is_lead = await _get_field_unit_team(current_user.id, db)
+        if is_lead and member_team_id:
+            team_id = member_team_id  # override caller-supplied team_id
+        else:
+            own_only = True
+
+    if own_only:
+        # Return only the current user's location
+        location = await location_service.get_user_location(current_user.id)
+        if not location:
+            return []
+        user_result = await db.execute(select(User).where(User.id == current_user.id))
+        u = user_result.scalar_one_or_none()
+        return [LocationResponse(
+            id=location.id,
+            user_id=location.user_id,
+            team_id=getattr(location, "team_id", None),
+            latitude=location.latitude,
+            longitude=location.longitude,
+            altitude=location.altitude,
+            speed=location.speed,
+            heading=location.heading,
+            accuracy=getattr(location, "accuracy", None),
+            accel_x=location.accel_x,
+            accel_y=location.accel_y,
+            accel_z=location.accel_z,
+            gyro_x=location.gyro_x,
+            gyro_y=location.gyro_y,
+            gyro_z=location.gyro_z,
+            battery_level=getattr(location, "battery_level", None),
+            status=getattr(location, "status", None) or "offline",
+            recorded_at=location.recorded_at,
+            created_at=getattr(location, "created_at", None) or location.recorded_at,
+            name=u.full_name or u.username if u else None,
+        )]
+
+    if start_time or end_time:
+        locations = await location_service.get_historical_snapshot(
+            team_id=team_id, start_time=start_time, end_time=end_time
+        )
+    else:
+        locations = await location_service.get_active_locations(team_id=team_id)
 
     # Bulk-fetch user names and team names to avoid N+1 queries
+    # Use getattr with defaults: LocationHistory objects lack team_id/status/accuracy/battery_level
     user_ids = list({loc.user_id for loc in locations})
-    team_ids = list({loc.team_id for loc in locations if loc.team_id})
+    team_ids = list({getattr(loc, "team_id", None) for loc in locations if getattr(loc, "team_id", None)})
     user_map: dict = {}
     team_map: dict = {}
     if user_ids:
@@ -140,25 +221,25 @@ async def get_active_locations(
         LocationResponse(
             id=loc.id,
             user_id=loc.user_id,
-            team_id=loc.team_id,
+            team_id=getattr(loc, "team_id", None),
             latitude=loc.latitude,
             longitude=loc.longitude,
             altitude=loc.altitude,
             speed=loc.speed,
             heading=loc.heading,
-            accuracy=loc.accuracy,
+            accuracy=getattr(loc, "accuracy", None),
             accel_x=loc.accel_x,
             accel_y=loc.accel_y,
             accel_z=loc.accel_z,
             gyro_x=loc.gyro_x,
             gyro_y=loc.gyro_y,
             gyro_z=loc.gyro_z,
-            battery_level=loc.battery_level,
-            status=loc.status,
+            battery_level=getattr(loc, "battery_level", None),
+            status=getattr(loc, "status", None) or "offline",
             recorded_at=loc.recorded_at,
-            created_at=loc.created_at,
+            created_at=getattr(loc, "created_at", None) or loc.recorded_at,
             name=user_map.get(loc.user_id),
-            team_name=team_map.get(loc.team_id) if loc.team_id else None,
+            team_name=team_map.get(getattr(loc, "team_id", None)) if getattr(loc, "team_id", None) else None,
         )
         for loc in locations
     ]

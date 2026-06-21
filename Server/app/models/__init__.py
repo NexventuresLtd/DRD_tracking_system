@@ -7,7 +7,7 @@ from app.models.route_follow import RouteFollowSession, RouteFollowPoint
 from app.models.poi import POI, POIVisibility
 from app.models.event import Event
 from app.models.message import Message
-from app.models.zone import Zone, ZoneCoordinate, ZoneAssignment
+from app.models.zone import Zone, ZoneCoordinate, ZoneAssignment, ZonePost, ZonePostAssignment
 from app.models.notification import Notification, UserFlag
 from app.models.audit import AuditLog, UserSession
 
@@ -19,7 +19,7 @@ __all__ = [
     "POI", "POIVisibility",
     "Event",
     "Message",
-    "Zone", "ZoneCoordinate", "ZoneAssignment",
+    "Zone", "ZoneCoordinate", "ZoneAssignment", "ZonePost", "ZonePostAssignment",
     "Notification", "UserFlag",
     "AuditLog", "UserSession",
 ]

@@ -16,8 +16,8 @@ class EnvironmentConfig {
     buildFlavor = flavor;
 
     // All flavors always use the production server
-    apiBaseUrl = 'https://drd.nexventures.net/api/v1';
-    wsUrl = 'wss://drd.nexventures.net/ws';
+    apiBaseUrl = 'http://192.168.1.73:8000/api/v1';
+    wsUrl = 'ws://192.168.1.73:8000/ws';
 
     debugPrint('🔧 Environment initialized: ${flavor.name.toUpperCase()}');
     debugPrint('📡 API URL: $apiBaseUrl');

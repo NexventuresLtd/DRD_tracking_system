@@ -104,6 +104,7 @@ app.include_router(admin.router, prefix="/api/v1")
 import os
 os.makedirs("uploads/evidence", exist_ok=True)
 os.makedirs("uploads/live_sessions", exist_ok=True)
+os.makedirs("uploads/avatars", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 # Include WebSocket routers

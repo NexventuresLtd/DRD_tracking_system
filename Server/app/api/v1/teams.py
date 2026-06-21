@@ -275,15 +275,31 @@ async def add_team_member(
             await db.commit()
             return {"message": "Team member reactivated"}
     
+    # Enforce one lead per team: demote previous lead before assigning new one
+    if data.role == "lead":
+        prev_leads = await db.execute(
+            select(TeamMember).where(
+                TeamMember.team_id == team_id,
+                TeamMember.role == "lead",
+                TeamMember.is_active == True,
+            )
+        )
+        for prev in prev_leads.scalars().all():
+            prev.role = "support"
+        # Update the Team.lead_id
+        team_obj = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
+        if team_obj:
+            team_obj.lead_id = data.user_id
+
     team_member = TeamMember(
         team_id=team_id,
         user_id=data.user_id,
         role=data.role,
     )
-    
+
     db.add(team_member)
     await db.commit()
-    
+
     return {"message": "Member added to team"}
 
 @router.delete("/{team_id}/members/{user_id}")
@@ -311,5 +327,36 @@ async def remove_team_member(
     
     member.is_active = False
     await db.commit()
-    
+
     return {"message": "Member removed from team"}
+
+@router.put("/{team_id}/set-lead/{user_id}")
+async def set_team_lead(
+    team_id: UUID,
+    user_id: UUID,
+    current_user: User = Depends(require_commander),
+    db: AsyncSession = Depends(get_db)
+):
+    """Set a new team lead (demotes the previous lead)"""
+    team = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+
+    target = (await db.execute(
+        select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.user_id == user_id, TeamMember.is_active == True)
+    )).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="User is not a member of this team")
+
+    # Demote all current leads
+    prev_leads = await db.execute(
+        select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.role == "lead", TeamMember.is_active == True)
+    )
+    for prev in prev_leads.scalars().all():
+        prev.role = "support"
+
+    target.role = "lead"
+    team.lead_id = user_id
+    await db.commit()
+
+    return {"message": "Team lead updated"}

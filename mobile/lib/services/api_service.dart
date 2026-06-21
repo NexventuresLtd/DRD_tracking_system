@@ -69,6 +69,9 @@ class ApiService {
     }
   }
 
+  Future<dynamic> registerWithInvite(Map<String, dynamic> data) =>
+      post('/auth/register', data);
+
   Future<dynamic> put(String endpoint, [Map<String, dynamic>? data]) async {
     try {
       final response = await http.put(
@@ -177,5 +180,22 @@ class ApiService {
     } finally {
       _refreshFuture = null;
     }
+  }
+
+  Future<dynamic> uploadAvatar(String filePath) async {
+    final token = await _storage.getToken();
+    if (token == null) throw Exception('Not authenticated');
+    final request = http.MultipartRequest(
+      'POST',
+      Uri.parse('${AppConstants.baseUrl}/auth/upload-avatar/'),
+    );
+    request.headers['Authorization'] = 'Bearer $token';
+    request.files.add(await http.MultipartFile.fromPath('file', filePath));
+    final streamed = await request.send();
+    final response = await http.Response.fromStream(streamed);
+    if (response.statusCode == 200) {
+      return jsonDecode(response.body);
+    }
+    throw Exception('Upload failed: ${response.body}');
   }
 }

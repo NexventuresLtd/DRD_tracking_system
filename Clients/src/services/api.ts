@@ -43,6 +43,9 @@ api.interceptors.response.use(
 export const login = (identifier: string, password: string) =>
   api.post('/api/v1/auth/login', { username: identifier, password });
 
+export const verifyOtp = (sessionId: string, otp: string) =>
+  api.post('/api/v1/auth/verify-otp', { session_id: sessionId, otp });
+
 export const register = (data: object) => api.post('/api/v1/auth/register', data);
 export const getMe = () => api.get('/api/v1/auth/me');
 export const logout = () => api.post('/api/v1/auth/logout');
@@ -64,10 +67,12 @@ export const addTeamMember = (teamId: string, data: object) =>
   api.post(`/api/v1/teams/${teamId}/members`, data);
 export const removeTeamMember = (teamId: string, userId: string) =>
   api.delete(`/api/v1/teams/${teamId}/members/${userId}`);
+export const setTeamLead = (teamId: string, userId: string) =>
+  api.put(`/api/v1/teams/${teamId}/set-lead/${userId}`);
 
 // ── Locations ─────────────────────────────────────────────────────────────────
-export const getActiveLocations = (teamId?: string) =>
-  api.get('/api/v1/locations', { params: teamId ? { team_id: teamId } : undefined });
+export const getActiveLocations = (params?: { team_id?: string; start_time?: string; end_time?: string }) =>
+  api.get('/api/v1/locations', { params });
 export const getUserLocation = (userId: string) => api.get(`/api/v1/locations/${userId}`);
 export const getUserLocationHistory = (userId: string, params?: object) =>
   api.get(`/api/v1/locations/${userId}/history`, { params });
@@ -81,6 +86,8 @@ export const createRoute = (data: object) => api.post('/api/v1/routes', data);
 export const getRoute = (id: string) => api.get(`/api/v1/routes/${id}`);
 export const updateRoute = (id: string, data: object) => api.put(`/api/v1/routes/${id}`, data);
 export const deleteRoute = (id: string) => api.delete(`/api/v1/routes/${id}`);
+export const approveRoute = (id: string) => api.post(`/api/v1/routes/${id}/approve`, {});
+export const rejectRoute = (id: string) => api.post(`/api/v1/routes/${id}/reject`, {});
 export const addWaypoint = (routeId: string, data: object) =>
   api.post(`/api/v1/routes/${routeId}/waypoints`, data);
 export const listRouteFollowSessions = (params?: object) => api.get('/api/v1/route-follow-sessions', { params });
@@ -96,6 +103,8 @@ export const updatePOI = (id: string, data: object) => api.put(`/api/v1/pois/${i
 export const deletePOI = (id: string) => api.delete(`/api/v1/pois/${id}`);
 export const updatePOIVisibility = (id: string, data: object) =>
   api.put(`/api/v1/pois/${id}/visibility`, data);
+
+export const post = <T = unknown>(url: string, data?: unknown) => api.post<T>(url, data);
 
 // ── Messages ──────────────────────────────────────────────────────────────────
 export const listMessages = (params?: object) => api.get('/api/v1/messages', { params });
@@ -134,8 +143,27 @@ export const getLiveSessionVideoUrl = (id: string) =>
   `${new URL((import.meta.env.VITE_API_URL as string) || 'https://drd.nexventures.net/', window.location.origin).origin}/api/v1/live-sessions/${id}/video`;
 
 // ── Evidence ──────────────────────────────────────────────────────────────────
+// ── Invites ───────────────────────────────────────────────────────────────────
+export const createInvite = (data: { team_id?: string; role?: string; team_member_role?: string; expiry?: string; label?: string }) =>
+  api.post('/api/v1/invites/', data);
+export const listInvites = () => api.get('/api/v1/invites/');
+export const revokeInvite = (token: string) => api.delete(`/api/v1/invites/${token}`);
+export const validateInvite = (token: string) => api.get(`/api/v1/invites/${token}`);
+
+// ── Evidence ──────────────────────────────────────────────────────────────────
+export const uploadEvidence = (file: File, caption?: string, poiId?: string) => {
+  const form = new FormData();
+  form.append('files', file, file.name);
+  if (caption) form.append('caption', caption);
+  if (poiId) form.append('poi_id', poiId);
+  return api.post('/api/v1/evidence/upload', form, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000,
+  });
+};
 export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/${poiId}`);
 export const getMessageEvidence = (messageId: string) => api.get(`/api/v1/evidence/message/${messageId}`);
+export const getAllEvidence = () => api.get(`/api/v1/evidence/all`);
 export const deleteEvidence = (id: string) => api.delete(`/api/v1/evidence/${id}`);
 
 // ── Admin ─────────────────────────────────────────────────────────────────────

@@ -67,6 +67,10 @@ dependencies:
   connectivity_plus: ^6.0.3
   battery_plus: ^6.0.1
 
+  # QR Code
+  mobile_scanner: ^5.2.3
+  qr_flutter: ^4.1.0
+
   # Camera & Image Picker
   image_picker: ^1.0.7
   permission_handler: ^11.3.1

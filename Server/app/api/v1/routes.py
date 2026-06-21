@@ -13,7 +13,7 @@ from app.models.route import Route, RouteWaypoint, RouteVisibility, RouteHistory
 from app.models.route_follow import RouteFollowSession
 from app.models.team import Team, TeamMember
 from app.schemas.route import RouteCreate, RouteUpdate, RouteResponse, RouteHistoryResponse, WaypointCreate, WaypointResponse
-from app.middleware.auth import get_current_user, require_commander
+from app.middleware.auth import get_current_user, require_commander, require_operator
 from app.websocket.manager import manager
 
 router = APIRouter(prefix="/routes", tags=["Routes"])
@@ -272,10 +272,13 @@ async def list_route_history(
 @router.post("/", response_model=RouteResponse, status_code=status.HTTP_201_CREATED)
 async def create_route(
     data: RouteCreate,
-    current_user: User = Depends(require_commander),
+    current_user: User = Depends(require_operator),
     db: AsyncSession = Depends(get_db)
 ):
-    """Create a new route"""
+    """Create a new route. Operators (T2) create routes as PENDING; Coordinators (T1) create as approved."""
+    coordinator_roles = {UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.COMMANDER}
+    initial_status = "approved" if current_user.role in coordinator_roles else "pending"
+
     # Create route
     route = Route(
         name=data.name,
@@ -287,6 +290,7 @@ async def create_route(
         is_zone=data.is_zone,
         zone_type=data.zone_type,
         meeting_point=data.meeting_point,
+        proposed_status=initial_status,
     )
     
     db.add(route)
@@ -351,6 +355,7 @@ async def create_route(
         assigned_user_id=route.assigned_user_id,
         color=route.color,
         is_active=route.is_active,
+        proposed_status=route.proposed_status,
         is_zone=route.is_zone,
         zone_type=route.zone_type,
         meeting_point=route.meeting_point,
@@ -368,6 +373,63 @@ async def create_route(
             for wp in waypoints
         ],
         created_by_name=current_user.full_name,
+    )
+
+@router.post("/{route_id}/approve", response_model=RouteResponse)
+async def approve_route(
+    route_id: UUID,
+    current_user: User = Depends(require_commander),
+    db: AsyncSession = Depends(get_db)
+):
+    """Approve a pending route proposal (Coordinators only)."""
+    result = await db.execute(select(Route).where(Route.id == route_id))
+    route = result.scalar_one_or_none()
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    route.proposed_status = "approved"
+    await db.commit()
+    await db.refresh(route)
+    waypoints_result = await db.execute(
+        select(RouteWaypoint).where(RouteWaypoint.route_id == route.id).order_by(RouteWaypoint.sequence_order)
+    )
+    waypoints = waypoints_result.scalars().all()
+    try:
+        await _broadcast_route_event(route, current_user, f"Route approved: {route.name}", waypoints)
+    except Exception:
+        pass
+    return RouteResponse(
+        id=route.id, name=route.name, description=route.description,
+        created_by=route.created_by, assigned_team_id=route.assigned_team_id,
+        assigned_user_id=route.assigned_user_id, color=route.color,
+        is_active=route.is_active, proposed_status=route.proposed_status,
+        is_zone=route.is_zone, zone_type=route.zone_type, meeting_point=route.meeting_point,
+        created_at=route.created_at, updated_at=route.updated_at,
+        waypoints=[WaypointResponse(id=w.id, sequence_order=w.sequence_order,
+            latitude=w.latitude, longitude=w.longitude, label=w.label, poi_type=w.poi_type)
+            for w in waypoints],
+    )
+
+@router.post("/{route_id}/reject", response_model=RouteResponse)
+async def reject_route(
+    route_id: UUID,
+    current_user: User = Depends(require_commander),
+    db: AsyncSession = Depends(get_db)
+):
+    """Reject a pending route proposal (Coordinators only)."""
+    result = await db.execute(select(Route).where(Route.id == route_id))
+    route = result.scalar_one_or_none()
+    if not route:
+        raise HTTPException(status_code=404, detail="Route not found")
+    route.proposed_status = "rejected"
+    await db.commit()
+    await db.refresh(route)
+    return RouteResponse(
+        id=route.id, name=route.name, description=route.description,
+        created_by=route.created_by, assigned_team_id=route.assigned_team_id,
+        assigned_user_id=route.assigned_user_id, color=route.color,
+        is_active=route.is_active, proposed_status=route.proposed_status,
+        is_zone=route.is_zone, zone_type=route.zone_type, meeting_point=route.meeting_point,
+        created_at=route.created_at, updated_at=route.updated_at, waypoints=[],
     )
 
 @router.get("/{route_id}", response_model=RouteResponse)
