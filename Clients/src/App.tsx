@@ -1,13 +1,45 @@
 import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
-import { useState, useEffect } from "react";
-import DODMap from "./Pages/DODMap";
-import Login from "./Pages/Login";
-import FieldUserView from "./Pages/FieldUserView";
+import { useState, useEffect, Suspense, lazy } from "react";
+import { useAuthStore } from "./stores/authStore";
+import AppLayout from "./components/layout/AppLayout";
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const token = localStorage.getItem("access_token");
-  if (!token) return <Navigate to="/login" replace />;
+const Login = lazy(() => import("./Pages/Login"));
+const Dashboard = lazy(() => import("./Pages/Dashboard"));
+const Teams = lazy(() => import("./Pages/Teams"));
+const Admin = lazy(() => import("./Pages/Admin"));
+const Profile = lazy(() => import("./Pages/Profile"));
+const LiveMap = lazy(() => import("./Pages/LiveMap"));
+const Missions = lazy(() => import("./Pages/Missions"));
+const Comms = lazy(() => import("./Pages/Comms"));
+const NotificationsPage = lazy(() => import("./Pages/NotificationsPage"));
+const Operations = lazy(() => import("./Pages/Operations"));
+const RoutesPage = lazy(() => import("./Pages/Routes"));
+const Evidence = lazy(() => import("./Pages/Evidence"));
+const TeamDetail = lazy(() => import("./Pages/TeamDetail"));
+const SOSPage = lazy(() => import("./Pages/SOS"));
+const Geofences = lazy(() => import("./Pages/Geofences"));
+const LiveFeed = lazy(() => import("./Pages/LiveFeed"));
+const PlaybackPage = lazy(() => import("./Pages/Playback"));
+const AnalyticsPage = lazy(() => import("./Pages/Analytics"));
+const PackagesPage = lazy(() => import("./Pages/Packages"));
+
+function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
+  const { isAuthenticated, user } = useAuthStore();
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (roles && user && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
+}
+
+function ComingSoon({ title }: { title: string }) {
+  return (
+    <div className="p-6">
+      <div className="text-center py-24">
+        <p className="text-gray-500 text-sm uppercase tracking-widest mb-2">Coming Soon</p>
+        <h2 className="text-white text-2xl font-bold">{title}</h2>
+        <p className="text-gray-400 text-sm mt-2">This feature is being built — check back soon.</p>
+      </div>
+    </div>
+  );
 }
 
 function OfflineOverlay() {
@@ -18,7 +50,10 @@ function OfflineOverlay() {
     const off = () => setOffline(true);
     window.addEventListener("online", on);
     window.addEventListener("offline", off);
-    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+    return () => {
+      window.removeEventListener("online", on);
+      window.removeEventListener("offline", off);
+    };
   }, []);
 
   if (!offline) return null;
@@ -28,14 +63,12 @@ function OfflineOverlay() {
       className="fixed inset-0 z-99999 flex flex-col items-center justify-center"
       style={{ background: "#050C1A", fontFamily: "'Poppins', sans-serif" }}
     >
-      {/* Animated grid background */}
       <div className="absolute inset-0 pointer-events-none" style={{
-        backgroundImage: "linear-gradient(rgba(59,130,246,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(59,130,246,0.05) 1px, transparent 1px)",
+        backgroundImage: "linear-gradient(rgba(34,197,94,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(34,197,94,0.05) 1px, transparent 1px)",
         backgroundSize: "48px 48px",
       }} />
 
       <div className="relative z-10 flex flex-col items-center gap-6 p-8 text-center max-w-sm">
-        {/* Pulsing disconnected icon */}
         <div className="relative">
           <div className="w-20 h-20 rounded-full flex items-center justify-center animate-pulse"
             style={{ background: "rgba(239,68,68,0.12)", border: "2px solid rgba(239,68,68,0.4)" }}>
@@ -49,7 +82,6 @@ function OfflineOverlay() {
               <line x1="12" y1="20" x2="12.01" y2="20" />
             </svg>
           </div>
-          {/* Red pulsing dot */}
           <span className="absolute top-0 right-0 w-4 h-4 rounded-full bg-red-500 border-2 border-slate-950 animate-ping" />
         </div>
 
@@ -74,7 +106,7 @@ function OfflineOverlay() {
         <button
           onClick={() => window.location.reload()}
           className="w-full py-3 rounded-xl font-bold text-white text-sm tracking-wide transition-all hover:opacity-90 active:scale-[0.98]"
-          style={{ background: "#2563eb", border: "none", cursor: "pointer" }}
+          style={{ background: "#16a34a", border: "none", cursor: "pointer" }}
         >
           Retry Connection
         </button>
@@ -89,26 +121,49 @@ export default function App() {
   return (
     <BrowserRouter>
       <OfflineOverlay />
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <DODMap />
-            </ProtectedRoute>
-          }
-        />
-        <Route
-          path="/field"
-          element={
-            <ProtectedRoute>
-              <FieldUserView />
-            </ProtectedRoute>
-          }
-        />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <Suspense fallback={<div style={{ minHeight:"100vh", background:"#000", display:"flex", alignItems:"center", justifyContent:"center" }}><div style={{ width:28, height:28, border:"2px solid #16a34a", borderTopColor:"transparent", borderRadius:"50%", animation:"spin 0.7s linear infinite" }} /></div>}>
+        <Routes>
+          <Route path="/login" element={<Login />} />
+
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <AppLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Dashboard />} />
+            <Route path="map" element={<LiveMap />} />
+            <Route path="teams" element={<Teams />} />
+            <Route path="teams/:id" element={<TeamDetail />} />
+            <Route path="missions" element={<Missions />} />
+            <Route path="missions/:id" element={<ComingSoon title="Mission Detail" />} />
+            <Route path="routes" element={<RoutesPage />} />
+            <Route path="operations" element={<Operations />} />
+            <Route path="comms" element={<Comms />} />
+            <Route path="evidence" element={<Evidence />} />
+            <Route path="notifications" element={<NotificationsPage />} />
+            <Route path="sos" element={<SOSPage />} />
+            <Route path="geofences" element={<Geofences />} />
+            <Route path="live-feed" element={<LiveFeed />} />
+            <Route path="playback" element={<PlaybackPage />} />
+            <Route path="analytics" element={<AnalyticsPage />} />
+            <Route path="packages" element={<PackagesPage />} />
+            <Route
+              path="admin"
+              element={
+                <ProtectedRoute roles={["operations_coordinator"]}>
+                  <Admin />
+                </ProtectedRoute>
+              }
+            />
+            <Route path="profile" element={<Profile />} />
+          </Route>
+
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </Suspense>
     </BrowserRouter>
   );
 }

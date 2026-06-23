@@ -1,362 +1,168 @@
-# app/api/v1/teams.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+import uuid
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
-from typing import Optional, List
-from uuid import UUID
 
 from app.database import get_db
-from app.models.team import Team, TeamMember
+from app.middleware.auth import get_current_user, require_coordinator, require_leader_or_above
 from app.models.user import User
-from app.schemas.team import (
-    TeamCreate, TeamUpdate, TeamResponse,
-    TeamMemberCreate, TeamMemberResponse
-)
-from app.middleware.auth import get_current_user, require_commander
+from app.schemas.team import TeamCreate, TeamUpdate, TeamResponse, TeamDetailResponse, AddMemberRequest, TeamMemberResponse
+from app.services.team_service import TeamService
 
 router = APIRouter(prefix="/teams", tags=["Teams"])
 
-@router.get("/", response_model=List[TeamResponse])
-async def list_teams(
-    is_active: Optional[bool] = None,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """List all teams"""
-    query = select(Team)
-    
-    if is_active is not None:
-        query = query.where(Team.is_active == is_active)
-    
-    query = query.order_by(Team.name)
-    
-    result = await db.execute(query)
-    teams = result.scalars().all()
-    
-    response = []
-    for team in teams:
-        # Count members
-        member_count_result = await db.execute(
-            select(func.count(TeamMember.id)).where(
-                TeamMember.team_id == team.id,
-                TeamMember.is_active == True,
-            )
-        )
-        member_count = member_count_result.scalar()
-        
-        # Get members
-        members_result = await db.execute(
-            select(TeamMember, User).join(User).where(
-                TeamMember.team_id == team.id,
-                TeamMember.is_active == True,
-            )
-        )
-        members = []
-        for tm, user in members_result:
-            members.append(TeamMemberResponse(
-                id=tm.id,
-                user_id=tm.user_id,
-                user_name=user.full_name or user.username,
-                role=tm.role,
-                joined_at=tm.joined_at,
-                is_active=tm.is_active,
-            ))
-        
-        response.append(TeamResponse(
-            id=team.id,
-            name=team.name,
-            code=team.code,
-            color=team.color,
-            description=team.description,
-            lead_id=team.lead_id,
-            is_active=team.is_active,
-            created_at=team.created_at,
-            updated_at=team.updated_at,
-            members=members,
-            member_count=member_count,
-        ))
-    
-    return response
 
-@router.post("/", response_model=TeamResponse, status_code=status.HTTP_201_CREATED)
+@router.get("", response_model=list[TeamResponse])
+async def list_teams(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = TeamService(db)
+    teams = await svc.list_teams()
+    result = []
+    for team in teams:
+        count = await svc.get_member_count(team.id)
+        t = TeamResponse.model_validate(team)
+        t.member_count = count
+        result.append(t)
+    return result
+
+
+@router.post("", response_model=TeamResponse, status_code=201)
 async def create_team(
     data: TeamCreate,
-    current_user: User = Depends(require_commander),
-    db: AsyncSession = Depends(get_db)
+    current_user: User = Depends(require_leader_or_above),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Create a new team"""
-    # Check if name exists
-    result = await db.execute(select(Team).where(Team.name == data.name))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Team name already exists"
-        )
-    
-    # Check if code exists
-    result = await db.execute(select(Team).where(Team.code == data.code))
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Team code already exists"
-        )
-    
-    team = Team(
-        name=data.name,
-        code=data.code,
-        color=data.color or "#3b82f6",
-        description=data.description,
-        lead_id=data.lead_id,
-    )
-    
-    db.add(team)
-    await db.commit()
-    await db.refresh(team)
-    
-    return TeamResponse(
-        id=team.id,
-        name=team.name,
-        code=team.code,
-        color=team.color,
-        description=team.description,
-        lead_id=team.lead_id,
-        is_active=team.is_active,
-        created_at=team.created_at,
-        updated_at=team.updated_at,
-        members=[],
-        member_count=0,
-    )
+    svc = TeamService(db)
+    team = await svc.create(data, current_user.id)
+    count = await svc.get_member_count(team.id)
+    result = TeamResponse.model_validate(team)
+    result.member_count = count
+    return result
 
-@router.get("/{team_id}", response_model=TeamResponse)
+
+@router.get("/{team_id}", response_model=TeamDetailResponse)
 async def get_team(
-    team_id: UUID,
+    team_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """Get team details"""
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    
+    svc = TeamService(db)
+    team = await svc.get_by_id(team_id)
     if not team:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team not found"
-        )
-    
-    # Count members
-    member_count_result = await db.execute(
-        select(func.count(TeamMember.id)).where(
-            TeamMember.team_id == team.id,
-            TeamMember.is_active == True,
-        )
-    )
-    member_count = member_count_result.scalar()
-    
-    # Get members
-    members_result = await db.execute(
-        select(TeamMember, User).join(User).where(
-            TeamMember.team_id == team.id,
-            TeamMember.is_active == True,
-        )
-    )
-    members = []
-    for tm, user in members_result:
-        members.append(TeamMemberResponse(
-            id=tm.id,
-            user_id=tm.user_id,
-            user_name=user.full_name or user.username,
-            role=tm.role,
-            joined_at=tm.joined_at,
-            is_active=tm.is_active,
-        ))
-    
-    return TeamResponse(
-        id=team.id,
-        name=team.name,
-        code=team.code,
-        color=team.color,
-        description=team.description,
-        lead_id=team.lead_id,
-        is_active=team.is_active,
-        created_at=team.created_at,
-        updated_at=team.updated_at,
-        members=members,
-        member_count=member_count,
-    )
+        raise HTTPException(status_code=404, detail="Team not found")
+    return TeamDetailResponse.model_validate(team)
+
 
 @router.put("/{team_id}", response_model=TeamResponse)
 async def update_team(
-    team_id: UUID,
+    team_id: uuid.UUID,
     data: TeamUpdate,
-    current_user: User = Depends(require_commander),
-    db: AsyncSession = Depends(get_db)
+    current_user: User = Depends(require_leader_or_above),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Update team"""
-    result = await db.execute(select(Team).where(Team.id == team_id))
-    team = result.scalar_one_or_none()
-    
-    if not team:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team not found"
-        )
-    
-    if data.name is not None:
-        team.name = data.name
-    if data.color is not None:
-        team.color = data.color
-    if data.description is not None:
-        team.description = data.description
-    if data.lead_id is not None:
-        team.lead_id = data.lead_id
-    if data.is_active is not None:
-        team.is_active = data.is_active
-    
-    await db.commit()
-    await db.refresh(team)
-    
-    return TeamResponse(
-        id=team.id,
-        name=team.name,
-        code=team.code,
-        color=team.color,
-        description=team.description,
-        lead_id=team.lead_id,
-        is_active=team.is_active,
-        created_at=team.created_at,
-        updated_at=team.updated_at,
-        members=[],
-        member_count=0,
-    )
-
-@router.post("/{team_id}/members", status_code=status.HTTP_201_CREATED)
-async def add_team_member(
-    team_id: UUID,
-    data: TeamMemberCreate,
-    current_user: User = Depends(require_commander),
-    db: AsyncSession = Depends(get_db)
-):
-    """Add member to team"""
-    # Check team exists
-    team_result = await db.execute(select(Team).where(Team.id == team_id))
-    if not team_result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team not found"
-        )
-    
-    # Check user exists
-    user_result = await db.execute(select(User).where(User.id == data.user_id))
-    if not user_result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="User not found"
-        )
-    
-    # Check if already member
-    existing = await db.execute(
-        select(TeamMember).where(
-            TeamMember.team_id == team_id,
-            TeamMember.user_id == data.user_id,
-        )
-    )
-    existing_member = existing.scalar_one_or_none()
-    
-    if existing_member:
-        if existing_member.is_active:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="User is already a member of this team"
-            )
-        else:
-            # Reactivate
-            existing_member.is_active = True
-            existing_member.role = data.role
-            await db.commit()
-            return {"message": "Team member reactivated"}
-    
-    # Enforce one lead per team: demote previous lead before assigning new one
-    if data.role == "lead":
-        prev_leads = await db.execute(
-            select(TeamMember).where(
-                TeamMember.team_id == team_id,
-                TeamMember.role == "lead",
-                TeamMember.is_active == True,
-            )
-        )
-        for prev in prev_leads.scalars().all():
-            prev.role = "support"
-        # Update the Team.lead_id
-        team_obj = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
-        if team_obj:
-            team_obj.lead_id = data.user_id
-
-    team_member = TeamMember(
-        team_id=team_id,
-        user_id=data.user_id,
-        role=data.role,
-    )
-
-    db.add(team_member)
-    await db.commit()
-
-    return {"message": "Member added to team"}
-
-@router.delete("/{team_id}/members/{user_id}")
-async def remove_team_member(
-    team_id: UUID,
-    user_id: UUID,
-    current_user: User = Depends(require_commander),
-    db: AsyncSession = Depends(get_db)
-):
-    """Remove member from team"""
-    result = await db.execute(
-        select(TeamMember).where(
-            TeamMember.team_id == team_id,
-            TeamMember.user_id == user_id,
-            TeamMember.is_active == True,
-        )
-    )
-    member = result.scalar_one_or_none()
-    
-    if not member:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Team member not found"
-        )
-    
-    member.is_active = False
-    await db.commit()
-
-    return {"message": "Member removed from team"}
-
-@router.put("/{team_id}/set-lead/{user_id}")
-async def set_team_lead(
-    team_id: UUID,
-    user_id: UUID,
-    current_user: User = Depends(require_commander),
-    db: AsyncSession = Depends(get_db)
-):
-    """Set a new team lead (demotes the previous lead)"""
-    team = (await db.execute(select(Team).where(Team.id == team_id))).scalar_one_or_none()
+    svc = TeamService(db)
+    team = await svc.get_by_id(team_id)
     if not team:
         raise HTTPException(status_code=404, detail="Team not found")
 
-    target = (await db.execute(
-        select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.user_id == user_id, TeamMember.is_active == True)
-    )).scalar_one_or_none()
-    if not target:
-        raise HTTPException(status_code=404, detail="User is not a member of this team")
+    if team.leader_id != current_user.id and current_user.role.value not in ("operations_coordinator", "planning_officer"):
+        raise HTTPException(status_code=403, detail="Only team leader or coordinator can update")
 
-    # Demote all current leads
-    prev_leads = await db.execute(
-        select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.role == "lead", TeamMember.is_active == True)
+    updated = await svc.update(team, data)
+    return TeamResponse.model_validate(updated)
+
+
+@router.delete("/{team_id}")
+async def delete_team(
+    team_id: uuid.UUID,
+    current_user: User = Depends(require_coordinator),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = TeamService(db)
+    team = await svc.get_by_id(team_id)
+    if not team:
+        raise HTTPException(status_code=404, detail="Team not found")
+    await svc.delete(team)
+    return {"message": "Team deleted"}
+
+
+@router.get("/{team_id}/members", response_model=list[TeamMemberResponse])
+async def get_team_members(
+    team_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = TeamService(db)
+    if not await svc.get_by_id(team_id):
+        raise HTTPException(status_code=404, detail="Team not found")
+    return await svc.get_members(team_id)
+
+
+@router.post("/{team_id}/members", status_code=201)
+async def add_member(
+    team_id: uuid.UUID,
+    data: AddMemberRequest,
+    current_user: User = Depends(require_leader_or_above),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = TeamService(db)
+    if not await svc.get_by_id(team_id):
+        raise HTTPException(status_code=404, detail="Team not found")
+    try:
+        member = await svc.add_member(team_id, data.user_id, data.role_in_team or "member")
+        return {"message": "Member added", "member_id": str(member.id)}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/{team_id}/members/{user_id}")
+async def remove_member(
+    team_id: uuid.UUID,
+    user_id: uuid.UUID,
+    current_user: User = Depends(require_leader_or_above),
+    db: AsyncSession = Depends(get_db),
+):
+    svc = TeamService(db)
+    if not await svc.get_by_id(team_id):
+        raise HTTPException(status_code=404, detail="Team not found")
+    removed = await svc.remove_member(team_id, user_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"message": "Member removed"}
+
+
+@router.get("/{team_id}/locations")
+async def get_team_locations(
+    team_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import select
+    from app.models.team import TeamMember
+    from app.models.location import Location
+    from app.models.user import User as UserModel
+
+    members = await db.execute(select(TeamMember).where(TeamMember.team_id == team_id))
+    member_ids = [m.user_id for m in members.scalars().all()]
+
+    locations = await db.execute(
+        select(Location, UserModel)
+        .join(UserModel, Location.user_id == UserModel.id)
+        .where(Location.user_id.in_(member_ids))
     )
-    for prev in prev_leads.scalars().all():
-        prev.role = "support"
-
-    target.role = "lead"
-    team.lead_id = user_id
-    await db.commit()
-
-    return {"message": "Team lead updated"}
+    result = []
+    for loc, user in locations.all():
+        result.append({
+            "user_id": str(user.id),
+            "username": user.username,
+            "full_name": user.full_name,
+            "avatar_url": user.avatar_url,
+            "latitude": loc.latitude,
+            "longitude": loc.longitude,
+            "heading": loc.heading,
+            "speed": loc.speed,
+            "status": loc.status.value,
+            "last_updated": loc.last_update.isoformat(),
+        })
+    return result

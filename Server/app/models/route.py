@@ -1,83 +1,88 @@
-# app/models/route.py
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, UUID, Integer, Float, Text, JSON
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
+import enum
+from datetime import datetime
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Text, Integer, Float
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
+
+
+class RouteType(str, enum.Enum):
+    patrol = "patrol"
+    vehicle = "vehicle"
+    walking = "walking"
+    search = "search"
+    supply = "supply"
+    custom = "custom"
+
+
+class AssignmentStatus(str, enum.Enum):
+    pending = "pending"
+    in_progress = "in_progress"
+    completed = "completed"
+    cancelled = "cancelled"
+
 
 class Route(Base):
     __tablename__ = "routes"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False)
-    description = Column(Text)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    assigned_team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    assigned_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    color = Column(String(7), default="#3b82f6")
-    is_active = Column(Boolean, default=True)
-    proposed_status = Column(String(20), nullable=False, default="approved", server_default="approved")
-    is_zone = Column(Boolean, default=False)
-    zone_type = Column(String(50))
-    meeting_point = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    created_by_user = relationship("User", back_populates="created_routes", foreign_keys=[created_by])
-    assigned_user = relationship("User", back_populates="assigned_routes", foreign_keys=[assigned_user_id])
-    assigned_team = relationship("Team", back_populates="assigned_routes", foreign_keys=[assigned_team_id])
-    waypoints = relationship("RouteWaypoint", back_populates="route", order_by="RouteWaypoint.sequence_order")
-    visibility = relationship("RouteVisibility", back_populates="route")
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    route_type: Mapped[RouteType] = mapped_column(Enum(RouteType), default=RouteType.patrol)
+    color: Mapped[str] = mapped_column(String(7), default="#3b82f6")
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    status: Mapped[str] = mapped_column(String(50), default="active")
+    total_distance_m: Mapped[float | None] = mapped_column(Float, nullable=True)
+    estimated_duration_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    waypoints: Mapped[list["RouteWaypoint"]] = relationship("RouteWaypoint", back_populates="route", cascade="all, delete-orphan", order_by="RouteWaypoint.order_index")
+    assignments: Mapped[list["RouteAssignment"]] = relationship("RouteAssignment", back_populates="route", cascade="all, delete-orphan")
+
 
 class RouteWaypoint(Base):
     __tablename__ = "route_waypoints"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    route_id = Column(UUID(as_uuid=True), ForeignKey("routes.id"), nullable=False)
-    sequence_order = Column(Integer, nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    label = Column(String(100))
-    poi_type = Column(String(50))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    route = relationship("Route", back_populates="waypoints")
 
-class RouteVisibility(Base):
-    __tablename__ = "route_visibility"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    route_id = Column(UUID(as_uuid=True), ForeignKey("routes.id"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    visible_to_all = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    route = relationship("Route", back_populates="visibility")
-    team = relationship("Team", back_populates="route_visibility")
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    route_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    order_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    altitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    route: Mapped["Route"] = relationship("Route", back_populates="waypoints")
 
 
-class RouteHistory(Base):
-    __tablename__ = "route_history"
+class RouteAssignment(Base):
+    __tablename__ = "route_assignments"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    route_id = Column(UUID(as_uuid=True), ForeignKey("routes.id"), nullable=False, index=True)
-    name = Column(String(255), nullable=False)
-    description = Column(Text)
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    assigned_team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    assigned_user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    color = Column(String(7), default="#3b82f6")
-    is_zone = Column(Boolean, default=False)
-    zone_type = Column(String(50))
-    meeting_point = Column(Boolean, default=False)
-    is_active = Column(Boolean, default=False)
-    waypoints = Column(JSON, nullable=False)
-    deleted_at = Column(DateTime(timezone=True), server_default=func.now())
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    route_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="CASCADE"), nullable=True)
+    user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    assigned_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[AssignmentStatus] = mapped_column(Enum(AssignmentStatus), default=AssignmentStatus.pending)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    assigned_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
-    created_by_user = relationship("User", foreign_keys=[created_by])
-    assigned_user = relationship("User", foreign_keys=[assigned_user_id])
-    assigned_team = relationship("Team", foreign_keys=[assigned_team_id])
+    route: Mapped["Route"] = relationship("Route", back_populates="assignments")
+
+
+class RouteFollowSession(Base):
+    __tablename__ = "route_follow_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    route_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("routes.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    current_waypoint_index: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    distance_covered_m: Mapped[float] = mapped_column(Float, default=0.0)

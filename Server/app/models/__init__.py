@@ -1,25 +1,47 @@
-# app/models/__init__.py
-from app.models.user import User, UserRole
+from app.database import Base
+from app.models.user import User, UserSession, UserDevice
+from app.models.invite import Invite
 from app.models.team import Team, TeamMember
 from app.models.location import Location, LocationHistory
-from app.models.route import Route, RouteWaypoint, RouteVisibility, RouteHistory
-from app.models.route_follow import RouteFollowSession, RouteFollowPoint
-from app.models.poi import POI, POIVisibility
-from app.models.event import Event
-from app.models.message import Message
-from app.models.zone import Zone, ZoneCoordinate, ZoneAssignment, ZonePost, ZonePostAssignment
-from app.models.notification import Notification, UserFlag
-from app.models.audit import AuditLog, UserSession
+from app.models.mission import Mission, MissionObjective, MissionAssignment
+from app.models.route import Route, RouteWaypoint, RouteAssignment, RouteFollowSession
+from app.models.contact import Contact
+from app.models.drawing import Drawing, DrawingPoint
+from app.models.geofence import Geofence, GeofenceEvent
+from app.models.poi import POI
+from app.models.evidence import Evidence
+from app.models.message import Message, MessageRead, MessageAttachment
+from app.models.call import Call, CallParticipant
+from app.models.notification import Notification
+from app.models.audit import AuditLog
+from app.models.sos import SOSEvent
+from app.models.zone import Zone
+from app.models.live_session import LiveSession
+from app.models.checkpoint import Checkpoint
+from app.models.resource import ResourceItem
+from app.models.package import MissionPackage, MissionPackageItem
 
 __all__ = [
-    "User", "UserRole",
+    "Base",
+    "User", "UserSession", "UserDevice",
+    "Invite",
     "Team", "TeamMember",
     "Location", "LocationHistory",
-    "Route", "RouteWaypoint", "RouteVisibility", "RouteHistory", "RouteFollowSession", "RouteFollowPoint",
-    "POI", "POIVisibility",
-    "Event",
-    "Message",
-    "Zone", "ZoneCoordinate", "ZoneAssignment", "ZonePost", "ZonePostAssignment",
-    "Notification", "UserFlag",
-    "AuditLog", "UserSession",
+    "Mission", "MissionObjective", "MissionAssignment",
+    "Route", "RouteWaypoint", "RouteAssignment", "RouteFollowSession",
+    "Contact",
+    "Drawing", "DrawingPoint",
+    "Geofence", "GeofenceEvent",
+    "POI",
+    "Evidence",
+    "Message", "MessageRead", "MessageAttachment",
+    "Call", "CallParticipant",
+    "Notification",
+    "AuditLog",
+    "SOSEvent",
+    "Zone",
+    "LiveSession",
+    "Checkpoint",
+    "ResourceItem",
+    "MissionPackage", "MissionPackageItem",
 ]

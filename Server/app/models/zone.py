@@ -1,87 +1,26 @@
-# app/models/zone.py
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, UUID, Float, Integer
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
+from datetime import datetime
+from sqlalchemy import String, Boolean, DateTime, ForeignKey, Text, Float
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from app.database import Base
+
 
 class Zone(Base):
     __tablename__ = "zones"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False)
-    zone_type = Column(String(50), nullable=False)
-    color = Column(String(7), default="#ec4899")
-    description = Column(String(500))
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    is_active = Column(Boolean, default=True)
-    # Circle zone fields (null = polygon zone)
-    center_lat = Column(Float, nullable=True)
-    center_lng = Column(Float, nullable=True)
-    radius_m = Column(Float, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    creator = relationship("User", back_populates="created_zones")
-    coordinates = relationship("ZoneCoordinate", back_populates="zone", order_by="ZoneCoordinate.sequence_order")
-    assignments = relationship("ZoneAssignment", back_populates="zone")
-    posts = relationship("ZonePost", back_populates="zone", cascade="all, delete-orphan")
 
-class ZoneCoordinate(Base):
-    __tablename__ = "zone_coordinates"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    zone_id = Column(UUID(as_uuid=True), ForeignKey("zones.id"), nullable=False)
-    sequence_order = Column(Integer, nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    zone = relationship("Zone", back_populates="coordinates")
-
-class ZoneAssignment(Base):
-    __tablename__ = "zone_assignments"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    zone_id = Column(UUID(as_uuid=True), ForeignKey("zones.id"), nullable=False)
-    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    # Relationships
-    zone = relationship("Zone", back_populates="assignments")
-    team = relationship("Team", back_populates="zone_assignments")
-
-
-class ZonePost(Base):
-    """A named position point inside a zone where soldiers are posted."""
-    __tablename__ = "zone_posts"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    zone_id = Column(UUID(as_uuid=True), ForeignKey("zones.id", ondelete="CASCADE"), nullable=False)
-    name = Column(String(255), nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    description = Column(String(500))
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    zone = relationship("Zone", back_populates="posts")
-    soldier_assignments = relationship("ZonePostAssignment", back_populates="post", cascade="all, delete-orphan")
-
-
-class ZonePostAssignment(Base):
-    """Which soldier is assigned to which zone post."""
-    __tablename__ = "zone_post_assignments"
-
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    post_id = Column(UUID(as_uuid=True), ForeignKey("zone_posts.id", ondelete="CASCADE"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False)
-    assigned_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    assigned_at = Column(DateTime(timezone=True), server_default=func.now())
-
-    post = relationship("ZonePost", back_populates="soldier_assignments")
-    user = relationship("User", foreign_keys=[user_id])
-    assigner = relationship("User", foreign_keys=[assigned_by])
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    zone_type: Mapped[str] = mapped_column(String(50), default="operational")
+    color: Mapped[str] = mapped_column(String(7), default="#6366f1")
+    fill_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    polygon_points: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    center_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    center_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
+    radius: Mapped[float | None] = mapped_column(Float, nullable=True)
+    is_circle: Mapped[bool] = mapped_column(Boolean, default=False)
+    mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

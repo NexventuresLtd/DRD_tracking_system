@@ -1,43 +1,35 @@
 #!/usr/bin/env python3
 """
-DRD Reticulum Bridge
-====================
-Bidirectional gateway between the Reticulum mesh radio network and the
-DRD FastAPI server.  Run this as a sidecar process on any node that has
-both a Reticulum interface (serial LoRa / UDP) AND IP connectivity to the
-FastAPI server.
+DRD Reticulum Bridge  v2  — LXMF + Raw packet gateway
+=======================================================
+Runs as a sidecar alongside the DRD FastAPI server.
+Supports two operation modes simultaneously:
+
+  1. LXMF mode  — Sideband (Android/iOS) and other LXMF apps send messages to
+                   the bridge's LXMF destination.  Text messages that begin with
+                   '{' are parsed as JSON commands; all others become chat messages
+                   forwarded to the DRD comms channel.
+
+  2. Raw packet  — Custom Flutter/Python field clients send raw msgpack packets
+                   (same protocol as v1) for high-throughput telemetry.
 
 Flow
 ────
-  Field radio  ──RNS packet──▶  bridge  ──HTTP POST──▶  FastAPI
-  FastAPI WS   ──broadcast──▶   bridge  ──RNS packet──▶  field radio
+  Phone/Sideband  ──LXMF──▶  bridge  ──HTTP──▶  FastAPI  ──DB──▶  dashboard
+  FastAPI WS      ──event──▶  bridge  ──LXMF──▶  Phone/Sideband
+  Field computer  ──msgpack─▶ bridge  ──HTTP──▶  FastAPI
 
-Packet format (inbound from field units)
+Environment variables (see .env.example)
 ─────────────────────────────────────────
-  All packets are msgpack-encoded dicts with at minimum:
-    { "type": "<msg_type>", "user_id": "<uuid>", "token": "<jwt>", ... }
-
-  Supported types:
-    location_update  – forward to POST /api/v1/locations
-    sos              – create FLAG event via POST /api/v1/events
-    message          – forward to POST /api/v1/messages
-    ping             – echo back a pong (no API call)
-
-Packet format (outbound to field units)
-─────────────────────────────────────────
-  { "type": "broadcast", "payload": <original WS message dict> }
-
-Environment variables (.env or shell export)
-────────────────────────────────────────────
-  API_BASE_URL       Base URL of FastAPI server  (default: http://127.0.0.1:8000)
-  API_TOKEN          Service-account JWT for making API calls on behalf of the bridge
-  WS_URL             WebSocket URL to subscribe for broadcasts
-                     (default: ws://127.0.0.1:8000/ws/events)
-  RNS_APP_NAME       Reticulum destination app name  (default: drd)
-  RNS_APP_ASPECT     Reticulum destination aspect     (default: bridge)
-  RNS_CONFIG_DIR     Path to directory containing reticulum.config
-                     (default: ~/.reticulum)
-  BRIDGE_LOG_LEVEL   Logging level: DEBUG / INFO / WARNING  (default: INFO)
+  API_BASE_URL        http://127.0.0.1:8000  (or public URL)
+  API_TOKEN           Service-account JWT (created via admin panel)
+  WS_URL              ws://127.0.0.1:8000/ws/events?token=<API_TOKEN>
+  RNS_APP_NAME        drd
+  RNS_APP_ASPECT      bridge
+  RNS_CONFIG_DIR      ~/.reticulum
+  RNS_IDENTITY_PATH   ~/.reticulum/drd_bridge_identity  (persisted identity)
+  ANNOUNCE_INTERVAL   300  (seconds between RNS announces)
+  BRIDGE_LOG_LEVEL    INFO
 """
 
 import asyncio
@@ -48,42 +40,58 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+load_dotenv(Path(__file__).parent / ".env")
 
 import aiohttp
 import msgpack
 import RNS
+import LXMF
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# ── Configuration ──────────────────────────────────────────────────────────────
 
-API_BASE   = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
-API_TOKEN  = os.getenv("API_TOKEN", "")
-WS_URL     = os.getenv("WS_URL", "ws://127.0.0.1:8000/ws/events")
-APP_NAME   = os.getenv("RNS_APP_NAME", "drd")
-APP_ASPECT = os.getenv("RNS_APP_ASPECT", "bridge")
-CONFIG_DIR = os.getenv("RNS_CONFIG_DIR", os.path.expanduser("~/.reticulum"))
+API_BASE          = os.getenv("API_BASE_URL",      "http://127.0.0.1:8000")
+API_TOKEN         = os.getenv("API_TOKEN",         "")
+WS_URL            = os.getenv("WS_URL",            f"ws://127.0.0.1:8000/ws/events")
+APP_NAME          = os.getenv("RNS_APP_NAME",      "drd")
+APP_ASPECT        = os.getenv("RNS_APP_ASPECT",    "bridge")
+CONFIG_DIR        = os.getenv("RNS_CONFIG_DIR",    str(Path.home() / ".reticulum"))
+IDENTITY_PATH     = os.getenv("RNS_IDENTITY_PATH", str(Path.home() / ".reticulum" / "drd_bridge_identity"))
+ANNOUNCE_INTERVAL = int(os.getenv("ANNOUNCE_INTERVAL", "300"))
 
 LOG_LEVEL = getattr(logging, os.getenv("BRIDGE_LOG_LEVEL", "INFO").upper(), logging.INFO)
 logging.basicConfig(
     level=LOG_LEVEL,
-    format="%(asctime)s [%(levelname)s] %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s  %(message)s",
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("drd.bridge")
 
-# ── Global state ──────────────────────────────────────────────────────────────
+# ── Global state ───────────────────────────────────────────────────────────────
 
-# Maps RNS destination hash (hex) → aiohttp session + user context
-# so we can send replies back to specific field units
-_known_units: dict[str, dict] = {}
+# hex_hash → {"lxmf": bool, "dest": RNS.Destination | None}
+_peers: dict[str, dict] = {}
+_loop: Optional[asyncio.AbstractEventLoop] = None
+_inbound: asyncio.Queue = asyncio.Queue()
 
-# Event loop shared between RNS callbacks and asyncio
-_loop: asyncio.AbstractEventLoop | None = None
+# ── Identity: persist so the bridge hash never changes across restarts ─────────
 
-# ── Reticulum helpers ─────────────────────────────────────────────────────────
+def _load_or_create_identity() -> RNS.Identity:
+    path = Path(IDENTITY_PATH)
+    if path.exists():
+        identity = RNS.Identity.from_file(str(path))
+        log.info("Loaded persistent identity from %s", path)
+    else:
+        identity = RNS.Identity()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        identity.to_file(str(path))
+        log.info("Created new identity — saved to %s", path)
+    return identity
+
+# ── Packet codec ───────────────────────────────────────────────────────────────
 
 def _unpack(raw: bytes) -> Optional[dict]:
     try:
@@ -92,29 +100,12 @@ def _unpack(raw: bytes) -> Optional[dict]:
         try:
             return json.loads(raw)
         except Exception:
-            log.warning("Could not decode packet (not msgpack or JSON)")
             return None
-
 
 def _pack(data: dict) -> bytes:
     return msgpack.packb(data, use_bin_type=True)
 
-
-def _send_to_unit(destination_hash: str, payload: dict):
-    """Send a msgpack packet to a known field-unit destination."""
-    try:
-        dest_bytes = bytes.fromhex(destination_hash)
-        dest = RNS.Destination.recall(dest_bytes)
-        if dest is None:
-            log.debug("Destination %s not in path table — skipping outbound", destination_hash)
-            return
-        packet = RNS.Packet(dest, _pack(payload))
-        packet.send()
-        log.debug("Sent to %s: type=%s", destination_hash[:8], payload.get("type"))
-    except Exception as exc:
-        log.warning("Failed to send to %s: %s", destination_hash[:8], exc)
-
-# ── API forwarding ────────────────────────────────────────────────────────────
+# ── API helpers ────────────────────────────────────────────────────────────────
 
 async def _post(session: aiohttp.ClientSession, path: str, body: dict, token: str) -> Optional[dict]:
     url = f"{API_BASE}{path}"
@@ -123,208 +114,223 @@ async def _post(session: aiohttp.ClientSession, path: str, body: dict, token: st
         async with session.post(url, json=body, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as r:
             if r.status in (200, 201):
                 return await r.json()
-            text = await r.text()
-            log.warning("API %s → %s: %s", path, r.status, text[:200])
+            log.warning("API %s → %s", path, r.status)
     except Exception as exc:
         log.warning("API call failed (%s): %s", path, exc)
     return None
 
+# ── Packet dispatchers ─────────────────────────────────────────────────────────
 
 async def _handle_location(session: aiohttp.ClientSession, pkt: dict):
     token = pkt.get("token") or API_TOKEN
-    body = {
-        "user_id":   pkt.get("user_id"),
-        "latitude":  pkt.get("latitude"),
-        "longitude": pkt.get("longitude"),
-        "altitude":  pkt.get("altitude"),
-        "speed":     pkt.get("speed"),
-        "heading":   pkt.get("heading"),
-        "accuracy":  pkt.get("accuracy"),
-        "battery_level": pkt.get("battery_level"),
-        "recorded_at": pkt.get("recorded_at", datetime.now(timezone.utc).isoformat()),
-    }
-    result = await _post(session, "/api/v1/locations", body, token)
-    if result:
-        log.info("Location stored for user %s", pkt.get("user_id", "?")[:8])
-
+    body = {k: pkt[k] for k in ("latitude", "longitude", "altitude", "speed", "heading", "accuracy") if k in pkt}
+    body["recorded_at"] = pkt.get("recorded_at", datetime.now(timezone.utc).isoformat())
+    if await _post(session, "/api/v1/locations", body, token):
+        log.info("Location stored uid=%s", str(pkt.get("user_id", "?"))[:8])
 
 async def _handle_sos(session: aiohttp.ClientSession, pkt: dict):
     token = pkt.get("token") or API_TOKEN
     body = {
-        "user_id":    pkt.get("user_id"),
-        "event_type": "FLAG",
-        "description": pkt.get("message", "SOS via Reticulum mesh"),
-        "event_metadata": {
-            "source": "reticulum",
-            "latitude":  pkt.get("latitude"),
-            "longitude": pkt.get("longitude"),
-        },
+        "latitude":  pkt.get("latitude"),
+        "longitude": pkt.get("longitude"),
+        "message":   pkt.get("message", "SOS via Reticulum mesh"),
     }
-    result = await _post(session, "/api/v1/events", body, token)
-    if result:
-        log.warning("SOS event created for user %s", pkt.get("user_id", "?")[:8])
-
+    if await _post(session, "/api/v1/sos", body, token):
+        log.warning("SOS triggered uid=%s", str(pkt.get("user_id", "?"))[:8])
 
 async def _handle_message(session: aiohttp.ClientSession, pkt: dict):
     token = pkt.get("token") or API_TOKEN
-    body = {
-        "sender_id":  pkt.get("user_id"),
-        "content":    pkt.get("content", ""),
-        "team_id":    pkt.get("team_id"),
-        "recipient_id": pkt.get("recipient_id"),
-        "msg_type":   pkt.get("msg_type", "text"),
-    }
-    result = await _post(session, "/api/v1/messages", body, token)
-    if result:
-        log.info("Message forwarded from %s", pkt.get("user_id", "?")[:8])
-
+    body = {"content": pkt.get("content", ""), "channel": pkt.get("channel", "global")}
+    await _post(session, "/api/v1/messages", body, token)
 
 async def _dispatch(session: aiohttp.ClientSession, pkt: dict):
-    msg_type = pkt.get("type", "")
-    if msg_type == "location_update":
-        await _handle_location(session, pkt)
-    elif msg_type == "sos":
-        await _handle_sos(session, pkt)
-    elif msg_type == "message":
-        await _handle_message(session, pkt)
-    elif msg_type == "ping":
-        src_hash = pkt.get("_src_hash")
-        if src_hash:
-            _send_to_unit(src_hash, {"type": "pong", "ts": time.time()})
+    t = pkt.get("type", "")
+    if   t == "location_update": await _handle_location(session, pkt)
+    elif t == "sos":              await _handle_sos(session, pkt)
+    elif t == "message":          await _handle_message(session, pkt)
+    elif t == "ping":
+        src = pkt.get("_src_hash")
+        if src:
+            _send_raw(src, {"type": "pong", "ts": time.time()})
     else:
-        log.debug("Unknown packet type: %s", msg_type)
+        log.debug("Unknown type: %s", t)
 
-# ── Reticulum destination ─────────────────────────────────────────────────────
+# ── Outbound helpers ───────────────────────────────────────────────────────────
 
-def make_destination(identity: RNS.Identity) -> RNS.Destination:
-    dest = RNS.Destination(
-        identity,
-        RNS.Destination.IN,
-        RNS.Destination.SINGLE,
-        APP_NAME,
-        APP_ASPECT,
-    )
-    dest.set_proof_strategy(RNS.Destination.PROVE_ALL)
-    return dest
+def _send_raw(dest_hash: str, payload: dict):
+    try:
+        dest_bytes = bytes.fromhex(dest_hash)
+        dest = RNS.Destination.recall(dest_bytes)
+        if dest is None:
+            return
+        RNS.Packet(dest, _pack(payload)).send()
+    except Exception as exc:
+        log.debug("Raw send to %s failed: %s", dest_hash[:8], exc)
 
+def _send_lxmf(router: LXMF.LXMRouter, lxmf_dest: LXMF.LXMPeer, peer_hash: str, text: str):
+    try:
+        dest_bytes = bytes.fromhex(peer_hash)
+        dest_id    = RNS.Identity.recall(dest_bytes)
+        if dest_id is None:
+            RNS.Transport.request_path(dest_bytes)
+            log.debug("Requested path to %s, will retry when known", peer_hash[:8])
+            return
+        dest = RNS.Destination(dest_id, RNS.Destination.OUT, RNS.Destination.SINGLE, "lxmf", "delivery")
+        msg  = LXMF.LXMessage(dest, lxmf_dest, text, desired_method=LXMF.LXMessage.DIRECT)
+        router.handle_outbound(msg)
+        log.debug("LXMF sent to %s", peer_hash[:8])
+    except Exception as exc:
+        log.warning("LXMF send failed: %s", exc)
 
-def on_packet(message: RNS.Packet):
-    """Called by RNS in its own thread — schedule the async dispatch."""
-    raw = message.plaintext
+def _broadcast_all(router: LXMF.LXMRouter, lxmf_dest: LXMF.LXMPeer, payload: dict):
+    text = json.dumps(payload, separators=(",", ":"))
+    for h, meta in list(_peers.items()):
+        if meta.get("lxmf"):
+            _send_lxmf(router, lxmf_dest, h, text)
+        else:
+            _send_raw(h, {"type": "broadcast", "payload": payload})
+
+# ── LXMF message handler ───────────────────────────────────────────────────────
+
+def _on_lxmf(message: LXMF.LXMessage):
+    """Called by LXMF router when a message arrives from a phone/Sideband."""
+    src_hash = message.source_hash.hex() if message.source_hash else None
+    content  = message.content_as_string() if message.content else ""
+    log.info("LXMF from %s: %s", (src_hash or "?")[:8], content[:80])
+
+    if src_hash:
+        _peers[src_hash] = {"lxmf": True}
+
+    pkt: dict = {}
+    stripped = content.strip()
+    if stripped.startswith("{"):
+        try:
+            pkt = json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+    if not pkt:
+        # Plain text — treat as a global chat message
+        pkt = {"type": "message", "content": content, "channel": "global"}
+
+    pkt.setdefault("type", "message")
+    if src_hash:
+        pkt["_src_hash"] = src_hash
+
+    if _loop and not _loop.is_closed():
+        asyncio.run_coroutine_threadsafe(_inbound.put(pkt), _loop)
+
+# ── Raw RNS packet handler ─────────────────────────────────────────────────────
+
+def _on_raw_packet(pkt_obj: RNS.Packet):
+    raw = pkt_obj.plaintext
     pkt = _unpack(raw)
     if pkt is None:
         return
+    if pkt_obj.destination:
+        h = pkt_obj.destination.hash.hex()
+        _peers.setdefault(h, {"lxmf": False})
+        pkt["_src_hash"] = h
+    log.debug("Raw packet: type=%s", pkt.get("type"))
+    if _loop and not _loop.is_closed():
+        asyncio.run_coroutine_threadsafe(_inbound.put(pkt), _loop)
 
-    # Tag with the sender's destination hash so we can reply
-    if message.destination:
-        pkt["_src_hash"] = message.destination.hash.hex()
-        _known_units.setdefault(pkt["_src_hash"], {})
+# ── Workers ────────────────────────────────────────────────────────────────────
 
-    log.debug("RNS packet received: type=%s src=%s",
-              pkt.get("type"), pkt.get("_src_hash", "")[:8])
-
-    if _loop is not None and not _loop.is_closed():
-        asyncio.run_coroutine_threadsafe(_enqueue(pkt), _loop)
-
-
-_inbound_queue: asyncio.Queue = asyncio.Queue()
-
-
-async def _enqueue(pkt: dict):
-    await _inbound_queue.put(pkt)
-
-# ── WebSocket broadcast subscriber ───────────────────────────────────────────
-
-async def ws_subscriber():
-    """Subscribe to FastAPI event WebSocket and relay broadcasts to Reticulum."""
-    import websockets
-
-    headers = {"Authorization": f"Bearer {API_TOKEN}"} if API_TOKEN else {}
-    url = f"{WS_URL}?token={API_TOKEN}" if API_TOKEN else WS_URL
-
+async def _packet_worker(session: aiohttp.ClientSession):
     while True:
-        try:
-            async with websockets.connect(url, extra_headers=headers) as ws:
-                log.info("WS subscriber connected to %s", WS_URL)
-                async for raw in ws:
-                    try:
-                        data = json.loads(raw)
-                    except Exception:
-                        continue
-
-                    # Re-broadcast to every known field unit
-                    payload = {"type": "broadcast", "payload": data}
-                    for dest_hash in list(_known_units.keys()):
-                        _send_to_unit(dest_hash, payload)
-
-        except Exception as exc:
-            log.warning("WS subscriber error: %s — reconnecting in 5 s", exc)
-            await asyncio.sleep(5)
-
-# ── Inbound packet worker ─────────────────────────────────────────────────────
-
-async def packet_worker(session: aiohttp.ClientSession):
-    while True:
-        pkt = await _inbound_queue.get()
+        pkt = await _inbound.get()
         try:
             await _dispatch(session, pkt)
         except Exception as exc:
             log.error("Dispatch error: %s", exc)
         finally:
-            _inbound_queue.task_done()
+            _inbound.task_done()
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+async def _ws_subscriber(router: LXMF.LXMRouter, lxmf_dest: LXMF.LXMPeer):
+    import websockets
+    url = f"{WS_URL}?token={API_TOKEN}" if API_TOKEN else WS_URL
+    while True:
+        try:
+            async with websockets.connect(url) as ws:
+                log.info("WS subscriber connected")
+                async for raw in ws:
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        continue
+                    if _peers:
+                        _broadcast_all(router, lxmf_dest, data)
+        except Exception as exc:
+            log.warning("WS disconnected: %s — retry in 5s", exc)
+            await asyncio.sleep(5)
+
+async def _announce_loop(dest: RNS.Destination, lxmf_dest: LXMF.LXMPeer):
+    while True:
+        dest.announce()
+        lxmf_dest.announce()
+        log.info("Announced bridge (RNS %s)", RNS.prettyhexrep(dest.hash))
+        await asyncio.sleep(ANNOUNCE_INTERVAL)
+
+# ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main():
     global _loop
     _loop = asyncio.get_running_loop()
 
-    # Validate config
-    if not API_TOKEN:
-        log.warning("API_TOKEN not set — forwarded requests will use per-packet tokens only")
-
-    # Start Reticulum with our config
-    config_path = os.path.join(CONFIG_DIR, "config")
-    if not os.path.isfile(config_path):
-        # Copy the bundled config template
+    # Ensure Reticulum config exists
+    config_path = Path(CONFIG_DIR) / "config"
+    if not config_path.exists():
         import shutil
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        bundled = os.path.join(os.path.dirname(__file__), "reticulum.config")
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        bundled = Path(__file__).parent / "reticulum.config"
         shutil.copy(bundled, config_path)
-        log.info("Copied default config to %s", config_path)
+        log.info("Copied default RNS config to %s", config_path)
 
+    # Start Reticulum
     rns = RNS.Reticulum(configdir=CONFIG_DIR)
-    identity = RNS.Identity()
-    dest = make_destination(identity)
-    dest.set_packet_callback(on_packet)
 
-    log.info("Bridge destination hash: %s", RNS.prettyhexrep(dest.hash))
-    log.info("Listening on app=%s aspect=%s", APP_NAME, APP_ASPECT)
+    # Persistent identity
+    identity = _load_or_create_identity()
 
-    # HTTP session for API forwarding
+    # Raw RNS destination (for custom clients)
+    raw_dest = RNS.Destination(identity, RNS.Destination.IN, RNS.Destination.SINGLE, APP_NAME, APP_ASPECT)
+    raw_dest.set_proof_strategy(RNS.Destination.PROVE_ALL)
+    raw_dest.set_packet_callback(_on_raw_packet)
+
+    # LXMF router (for Sideband phones)
+    lxmf_router = LXMF.LXMRouter(storagepath=str(Path(CONFIG_DIR) / "lxmf_store"))
+    lxmf_dest   = lxmf_router.register_delivery_identity(identity, display_name="DRD Bridge")
+    lxmf_router.register_delivery_callback(_on_lxmf)
+
+    log.info("Bridge ready")
+    log.info("  RNS  destination : %s  (raw msgpack)", RNS.prettyhexrep(raw_dest.hash))
+    log.info("  LXMF destination : %s  (Sideband / phones)", RNS.prettyhexrep(lxmf_dest.hash))
+    log.info("  API endpoint     : %s", API_BASE)
+    log.info("  Peers known      : %d", len(_peers))
+
     async with aiohttp.ClientSession() as session:
-        tasks = [
-            asyncio.create_task(packet_worker(session), name="packet-worker"),
-            asyncio.create_task(ws_subscriber(), name="ws-subscriber"),
-        ]
-
         stop = asyncio.Event()
 
-        def _shutdown(sig, _):
-            log.info("Signal %s received — shutting down", sig)
+        def _sig(sig, _):
+            log.info("Signal %s → shutting down", sig)
             stop.set()
-
         for sig in (signal.SIGINT, signal.SIGTERM):
-            signal.signal(sig, _shutdown)
+            signal.signal(sig, _sig)
+
+        tasks = [
+            asyncio.create_task(_packet_worker(session),           name="packet-worker"),
+            asyncio.create_task(_ws_subscriber(lxmf_router, lxmf_dest), name="ws-subscriber"),
+            asyncio.create_task(_announce_loop(raw_dest, lxmf_dest),    name="announce"),
+        ]
 
         await stop.wait()
-        log.info("Bridge stopping")
+        log.info("Stopping bridge…")
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    log.info("Bridge stopped")
-
+    log.info("Bridge stopped.")
 
 if __name__ == "__main__":
     if sys.version_info < (3, 11):

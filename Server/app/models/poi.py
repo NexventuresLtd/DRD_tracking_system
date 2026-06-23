@@ -1,39 +1,24 @@
-# app/models/poi.py
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, UUID, Float
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
+from datetime import datetime
+from sqlalchemy import String, DateTime, ForeignKey, Text, Float
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
+
 
 class POI(Base):
     __tablename__ = "pois"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    name = Column(String(255), nullable=False)
-    description = Column(String(500))
-    poi_type = Column(String(50), nullable=False)
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    tactical_shape = Column(String(20), default="diamond")
-    status = Column(String(50), default="active")
-    created_by = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    # Relationships
-    creator = relationship("User", back_populates="created_pois")
-    visibility = relationship("POIVisibility", back_populates="poi")
 
-class POIVisibility(Base):
-    __tablename__ = "poi_visibility"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    poi_id = Column(UUID(as_uuid=True), ForeignKey("pois.id"), nullable=False)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"))
-    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    visible_to_all = Column(Boolean, default=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    poi = relationship("POI", back_populates="visibility")
-    team = relationship("Team", back_populates="poi_visibility")
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    altitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    poi_type: Mapped[str] = mapped_column(String(100), default="general")
+    icon: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    color: Mapped[str] = mapped_column(String(7), default="#8b5cf6")
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
+    mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+    created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)

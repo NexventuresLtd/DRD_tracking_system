@@ -1,445 +1,352 @@
-import React, { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  FiUser, FiLock, FiEye, FiEyeOff,
-  FiAlertTriangle,  FiRadio, FiWifi, FiNavigation, FiArrowRight
-} from "react-icons/fi";
-import * as api from "../services/api";
+import { authApi } from "../services/api";
+import { useAuthStore } from "../stores/authStore";
 
-const GPS_IMAGE = "https://images.unsplash.com/photo-1614064641938-3bbee52942c7?w=1200&q=80";
-
-function getErrorMessage(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (lower.includes("401") || lower.includes("invalid") || lower.includes("incorrect") || lower.includes("credential")) {
-    return "Invalid credentials. Verify your operator ID and access code.";
-  }
-  if (lower.includes("network") || lower.includes("connect") || lower.includes("timeout") || lower.includes("fetch")) {
-    return "Cannot reach command server. Check your network connection.";
-  }
-  if (lower.includes("locked") || lower.includes("disabled") || lower.includes("suspended")) {
-    return "Account locked. Contact your system administrator.";
-  }
-  if (lower.includes("403") || lower.includes("forbidden")) {
-    return "Access denied. You are not authorized for this system.";
-  }
-  return raw || "Authentication failed. Please try again.";
-}
+const FEATURES = [
+  { icon: "◈", label: "LIVE TRACKING",    desc: "Real-time GPS field awareness" },
+  { icon: "◉", label: "SECURE COMMS",     desc: "End-to-end encrypted messaging" },
+  { icon: "◇", label: "MISSION CONTROL",  desc: "Full operational planning suite" },
+  { icon: "◈", label: "MESH NETWORK",     desc: "Offline Reticulum uplink" },
+];
 
 export default function Login() {
-  const [identifier, setIdentifier] = useState("");
-  const [password, setPassword] = useState("");
+  const navigate = useNavigate();
+  const { setAuth } = useAuthStore();
+  const [form, setForm] = useState({ email: "", password: "" });
   const [showPass, setShowPass] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [idFocused, setIdFocused] = useState(false);
-  const [pwFocused, setPwFocused] = useState(false);
+  const [clock, setClock] = useState("");
 
-  // OTP step
-  const [step, setStep] = useState<"credentials" | "otp">("credentials");
-  const [sessionId, setSessionId] = useState("");
-  const [emailHint, setEmailHint] = useState("");
-  const [otp, setOtp] = useState("");
-
-  const navigate = useNavigate();
+  useEffect(() => {
+    const tick = () => setClock(new Date().toLocaleTimeString("en-GB", { hour12: false }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
     setLoading(true);
     try {
-      const { data } = await api.login(identifier, password);
-      if (data.status === "otp_required") {
-        setSessionId(data.session_id);
-        setEmailHint(data.email_hint);
-        setStep("otp");
-      } else {
-        localStorage.setItem("access_token", data.access_token);
-        if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
-        navigate("/");
-      }
-    } catch (err: unknown) {
-      const raw =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        "Authentication failed.";
-      setError(getErrorMessage(String(raw)));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleOtpSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError("");
-    setLoading(true);
-    try {
-      const { data } = await api.verifyOtp(sessionId, otp.trim());
-      localStorage.setItem("access_token", data.access_token);
-      if (data.refresh_token) localStorage.setItem("refresh_token", data.refresh_token);
+      const { data } = await authApi.login(form.email, form.password);
+      setAuth(data.user, data.access_token, data.refresh_token);
       navigate("/");
-    } catch (err: unknown) {
-      const raw =
-        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ||
-        "Verification failed.";
-      setError(String(raw));
+    } catch (err: any) {
+      setError(err.response?.data?.detail || "ACCESS DENIED — INVALID CREDENTIALS");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex bg-slate-950">
-      {/* ── LEFT PANEL — GPS tracking image ───────────────────────── */}
-      <motion.div
-        className="hidden lg:flex lg:w-[52%] relative overflow-hidden"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.7, ease: "easeOut" }}
-      >
-        {/* Background image */}
-        <div className="absolute inset-0">
-          <img
-            src={GPS_IMAGE}
-            alt="GPS tracking"
-            className="w-full h-full object-cover scale-105"
-            style={{ filter: "brightness(0.5) saturate(1.2)" }}
-          />
-        </div>
+    <div style={{
+      minHeight: "100vh",
+      background: "#000",
+      display: "flex",
+      fontFamily: "'JetBrains Mono', monospace",
+      position: "relative",
+      overflow: "hidden",
+    }}>
+      {/* Background grid */}
+      <div style={{
+        position: "fixed", inset: 0, pointerEvents: "none",
+        backgroundImage:
+          "linear-gradient(rgba(22,163,74,0.04) 1px, transparent 1px)," +
+          "linear-gradient(90deg, rgba(22,163,74,0.04) 1px, transparent 1px)",
+        backgroundSize: "60px 60px",
+      }} />
 
-        {/* Overlay gradient */}
-        <div className="absolute inset-0 bg-gradient-to-br from-slate-950/80 via-slate-900/50 to-slate-950/85" />
+      {/* Scanlines */}
+      <div style={{
+        position: "fixed", inset: 0, pointerEvents: "none",
+        backgroundImage: "repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px)",
+      }} />
 
-        {/* Subtle grid pattern overlay */}
-        <div
-          className="absolute inset-0 opacity-[0.03]"
-          style={{
-            backgroundImage: `linear-gradient(rgba(59, 130, 246, 0.3) 1px, transparent 1px), linear-gradient(90deg, rgba(59, 130, 246, 0.3) 1px, transparent 1px)`,
-            backgroundSize: '60px 60px'
-          }}
-        />
+      {/* Radial green glow top-left */}
+      <div style={{
+        position: "fixed", top: -200, left: -200,
+        width: 600, height: 600, borderRadius: "50%",
+        background: "radial-gradient(circle, rgba(22,163,74,0.07) 0%, transparent 70%)",
+        pointerEvents: "none",
+      }} />
 
-        {/* Animated scan line */}
-        <motion.div
-          className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"
-          animate={{ top: ["0%", "100%"] }}
-          transition={{
-            duration: 8,
-            repeat: Infinity,
-            ease: "linear",
-            repeatDelay: 2
-          }}
-        />
+      {/* ── LEFT PANEL ── */}
+      <div style={{
+        width: "52%",
+        display: "none",
+        flexDirection: "column",
+        justifyContent: "space-between",
+        padding: "48px 52px",
+        borderRight: "1px solid #0f1f0f",
+        position: "relative",
+        zIndex: 1,
+      }} className="lg-flex">
 
-        {/* Content overlay */}
-        <div className="relative z-10 flex flex-col h-full p-12 xl:p-16">
-          {/* Top branding */}
-          <motion.div
-            className="flex items-center gap-4"
-            initial={{ opacity: 0, y: -20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-          >
-            <div className="w-12 h-12 rounded-2xl overflow-hidden flex items-center justify-center">
-              <img src="/logo1.png" alt="DRD Logo" className="w-full h-full object-contain" />
+        {/* Top brand */}
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 60 }}>
+            <div style={{
+              width: 44, height: 44,
+              border: "1px solid #16a34a",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              position: "relative",
+            }}>
+              <span style={{ color: "#22c55e", fontSize: 12, fontWeight: 700, letterSpacing: 1 }}>DRD</span>
+              <div style={{ position: "absolute", top: -1, left: -1, width: 6, height: 6, background: "#22c55e" }} />
+              <div style={{ position: "absolute", bottom: -1, right: -1, width: 6, height: 6, background: "#22c55e" }} />
             </div>
             <div>
-              <div className="text-white font-bold text-lg tracking-[0.2em]">DRD TRACKING</div>
-              <div className="text-[10px] tracking-[0.3em] text-white/30 mt-1">FIELD COORDINATION</div>
+              <div style={{ color: "#22c55e", fontSize: 14, fontWeight: 700, letterSpacing: 3 }}>DRD OPERATIONS</div>
+              <div style={{ color: "#1f2d1f", fontSize: 9, letterSpacing: 3, marginTop: 2 }}>FIELD COORDINATION SYSTEM</div>
             </div>
-          </motion.div>
+          </div>
 
-          {/* Center tagline */}
-          <motion.div
-            className="flex-1 flex flex-col justify-center"
-            initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.5, duration: 0.7 }}
-          >
-            <h2 className="text-5xl xl:text-6xl font-bold text-white leading-[1.1] mb-6">
-              Real-Time Tracking
-              <br />
-              <span className="text-blue-400 text-4xl xl:text-5xl">Military Field Ops</span>
-              <br />
-              <span className="text-3xl xl:text-4xl">
-                Command
-              </span>
+          <div style={{ marginBottom: 48 }}>
+            <div style={{ color: "#1f2d1f", fontSize: 10, letterSpacing: 4, marginBottom: 16 }}>PLATFORM OVERVIEW</div>
+            <h2 style={{ color: "#d1fae5", fontSize: 28, fontWeight: 700, margin: 0, lineHeight: 1.3, letterSpacing: 1 }}>
+              TACTICAL<br />
+              <span style={{ color: "#16a34a" }}>COORDINATION</span><br />
+              PLATFORM
             </h2>
-            <p className="text-base xl:text-lg leading-relaxed text-white/40 max-w-md">
-              Live GPS tracking, tactical route planning, and secure team communications for deployed units.
-            </p>
+            <div style={{ width: 48, height: 2, background: "#16a34a", marginTop: 20 }} />
+          </div>
 
-            {/* Feature badges */}
-            <div className="flex flex-wrap gap-3 mt-8">
-              {['Live Tracking', 'Secure Comms', 'Route Planning'].map((feature, i) => (
-                <motion.span
-                  key={i}
-                  className="px-4 py-2 rounded-full text-xs font-medium bg-white/5 border border-white/10 text-white/60 backdrop-blur-sm"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.7 + i * 0.1 }}
-                >
-                  {feature}
-                </motion.span>
-              ))}
-            </div>
-          </motion.div>
-
-          {/* Bottom status row */}
-          <motion.div
-            className="flex gap-8"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.8 }}
-          >
-            {[
-              { icon: <FiWifi size={14} />, label: "SECURE TLS", ok: true },
-              { icon: <FiRadio size={14} />, label: "COMMAND LINK", ok: true },
-              { icon: <FiNavigation size={14} />, label: "GPS ACTIVE", ok: true },
-            ].map((s, i) => (
-              <motion.div
-                key={i}
-                className="flex items-center gap-3"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                transition={{ delay: 0.9 + i * 0.1 }}
+          <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            {FEATURES.map(({ icon, label, desc }) => (
+              <div key={label} style={{
+                display: "flex", alignItems: "center", gap: 16,
+                padding: "14px 16px",
+                borderLeft: "2px solid #0f1f0f",
+                transition: "border-color 0.15s",
+              }}
+                onMouseEnter={(e) => (e.currentTarget.style.borderLeftColor = "#16a34a")}
+                onMouseLeave={(e) => (e.currentTarget.style.borderLeftColor = "#0f1f0f")}
               >
-                <span className="text-emerald-400">{s.icon}</span>
-                <span className="text-[10px] font-semibold tracking-[0.2em] text-white/25">{s.label}</span>
-                <motion.span
-                  className="w-2 h-2 rounded-full bg-emerald-400"
-                  animate={{ opacity: [1, 0.2, 1] }}
-                  transition={{
-                    duration: 2,
-                    delay: i * 0.5,
-                    repeat: Infinity,
-                    ease: "easeInOut"
+                <span style={{ color: "#16a34a", fontSize: 18, flexShrink: 0 }}>{icon}</span>
+                <div>
+                  <div style={{ color: "#22c55e", fontSize: 10, letterSpacing: 2, marginBottom: 2 }}>{label}</div>
+                  <div style={{ color: "#374151", fontSize: 11 }}>{desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Bottom status bar */}
+        <div style={{
+          display: "flex", justifyContent: "space-between", alignItems: "center",
+          borderTop: "1px solid #0f1f0f", paddingTop: 16,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#22c55e", boxShadow: "0 0 6px #22c55e", display: "inline-block" }} />
+            <span style={{ color: "#1f2d1f", fontSize: 9, letterSpacing: 2 }}>SYSTEM ONLINE</span>
+          </div>
+          <span style={{ color: "#1f2d1f", fontSize: 9, letterSpacing: 2 }}>{clock}</span>
+          <span style={{ color: "#0f1f0f", fontSize: 9, letterSpacing: 1 }}>NODE: OPS-01</span>
+        </div>
+      </div>
+
+      {/* ── RIGHT PANEL — Form ── */}
+      <div style={{
+        flex: 1,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "40px 32px",
+        position: "relative",
+        zIndex: 1,
+      }}>
+        <div style={{ width: "100%", maxWidth: 380 }}>
+
+          {/* Mobile brand */}
+          <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 40, justifyContent: "center" }}>
+            <div style={{ width: 36, height: 36, border: "1px solid #16a34a", display: "flex", alignItems: "center", justifyContent: "center", position: "relative" }}>
+              <span style={{ color: "#22c55e", fontSize: 10, fontWeight: 700 }}>DRD</span>
+              <div style={{ position: "absolute", top: -1, left: -1, width: 5, height: 5, background: "#22c55e" }} />
+              <div style={{ position: "absolute", bottom: -1, right: -1, width: 5, height: 5, background: "#22c55e" }} />
+            </div>
+            <div>
+              <div style={{ color: "#22c55e", fontSize: 12, fontWeight: 700, letterSpacing: 2 }}>DRD OPERATIONS</div>
+              <div style={{ color: "#1f2d1f", fontSize: 8, letterSpacing: 2 }}>FIELD COORDINATION SYSTEM</div>
+            </div>
+          </div>
+
+          {/* Auth card */}
+          <div style={{ border: "1px solid #0f1f0f", background: "rgba(2,6,2,0.8)", padding: "36px 32px" }}>
+
+            {/* Card header */}
+            <div style={{ marginBottom: 28 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                <div style={{ flex: 1, height: 1, background: "#0f1f0f" }} />
+                <span style={{ color: "#16a34a", fontSize: 9, letterSpacing: 3 }}>SECURE LOGIN</span>
+                <div style={{ flex: 1, height: 1, background: "#0f1f0f" }} />
+              </div>
+              <h1 style={{ color: "#d1fae5", fontSize: 18, fontWeight: 700, margin: 0, letterSpacing: 2 }}>
+                OPERATOR AUTH
+              </h1>
+              <p style={{ color: "#374151", fontSize: 10, margin: "6px 0 0", letterSpacing: 1 }}>
+                Enter your credentials to access the system
+              </p>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div style={{
+                background: "rgba(127,29,29,0.2)", border: "1px solid #450a0a",
+                padding: "10px 14px", marginBottom: 20,
+                display: "flex", gap: 8, alignItems: "flex-start",
+              }}>
+                <span style={{ color: "#ef4444", fontSize: 14, lineHeight: 1, flexShrink: 0 }}>▲</span>
+                <span style={{ color: "#fca5a5", fontSize: 11, lineHeight: 1.5 }}>{error}</span>
+              </div>
+            )}
+
+            {/* Fields */}
+            <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+              <div>
+                <label style={{ color: "#374151", fontSize: 9, letterSpacing: 2, display: "block", marginBottom: 8 }}>
+                  IDENTIFIER
+                </label>
+                <input
+                  type="text"
+                  required
+                  autoComplete="username"
+                  value={form.email}
+                  placeholder="Email or username"
+                  onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  style={{
+                    width: "100%", padding: "11px 14px",
+                    background: "#040804", border: "1px solid #152015",
+                    color: "#d1fae5", fontSize: 12, letterSpacing: 0.5,
+                    outline: "none", boxSizing: "border-box",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    transition: "border-color 0.15s",
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#16a34a";
+                    e.target.style.boxShadow = "0 0 0 1px #16a34a20";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#152015";
+                    e.target.style.boxShadow = "none";
                   }}
                 />
-              </motion.div>
-            ))}
-          </motion.div>
-        </div>
-      </motion.div>
-
-      {/* ── RIGHT PANEL — Form ────────────────────────────────────── */}
-      <motion.div
-        className="flex-1 flex items-center justify-center p-6 sm:p-8 lg:p-12 xl:p-16"
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.5 }}
-      >
-        {/* Top accent line */}
-        <div className="absolute top-0 left-0 right-0 h-[1px] bg-gradient-to-r from-transparent via-blue-500/20 to-transparent lg:hidden" />
-
-        <motion.div
-          className="w-full max-w-[540px]"
-          initial={{ opacity: 0, y: 24 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2, duration: 0.6, ease: "easeOut" }}
-        >
-          {/* Mobile logo */}
-          <div className="flex flex-col items-center mb-10 lg:hidden">
-            <motion.div
-              className="w-20 h-20 rounded-2xl overflow-hidden flex items-center justify-center mb-5"
-              whileHover={{ scale: 1.05 }}
-            >
-              <img src="/logo1.png" alt="DRD Logo" className="w-full h-full object-contain" />
-            </motion.div>
-            <div className="text-white font-bold text-2xl tracking-[0.2em]">DRD TRACKING</div>
-            <div className="text-[10px] tracking-[0.3em] text-white/25 mt-2">FIELD COORDINATION SYSTEM</div>
-          </div>
-
-          {/* Heading */}
-          <div className="mb-8">
-            <h1 className="text-white text-[32px] sm:text-4xl font-bold mb-3 leading-tight">Welcome Back</h1>
-            <p className="text-sm sm:text-base text-white/35">Sign in to your tactical account</p>
-          </div>
-
-          {/* Card */}
-          <div className="rounded-3xl p-[1px] bg-gradient-to-b from-white/10 to-transparent">
-            <div className="rounded-3xl bg-slate-900/95 backdrop-blur-xl p-8 sm:p-10">
-              {/* Error banner */}
-              <AnimatePresence>
-                {error && (
-                  <motion.div
-                    className="mb-6 flex items-start gap-3 rounded-2xl px-5 py-4 bg-red-500/5 border border-red-500/20"
-                    initial={{ opacity: 0, y: -10, height: 0 }}
-                    animate={{ opacity: 1, y: 0, height: "auto" }}
-                    exit={{ opacity: 0, y: -10, height: 0 }}
-                    transition={{ duration: 0.3 }}
-                  >
-                    <FiAlertTriangle size={16} className="text-red-400 mt-0.5 shrink-0" />
-                    <span className="text-sm leading-relaxed text-red-300/90">{error}</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {step === "credentials" ? (
-                <form onSubmit={handleSubmit} className="space-y-7">
-                  {/* Identifier */}
-                  <div>
-                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
-                      USERNAME
-                    </label>
-                    <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${idFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'}`}>
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2">
-                        <FiUser size={18} className={idFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
-                      </span>
-                      <input
-                        type="text"
-                        value={identifier}
-                        onChange={e => setIdentifier(e.target.value)}
-                        onFocus={() => setIdFocused(true)}
-                        onBlur={() => setIdFocused(false)}
-                        required
-                        autoComplete="username"
-                        placeholder="commander.alpha or user@drd.mil"
-                        className="w-full pl-12 pr-5 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
-                      />
-                    </div>
-                  </div>
-
-                  {/* Password */}
-                  <div>
-                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
-                      ACCESS CODE
-                    </label>
-                    <div className={`relative rounded-2xl overflow-hidden transition-all duration-300 ${pwFocused ? 'ring-2 ring-blue-500/50' : 'ring-1 ring-white/[0.08]'}`}>
-                      <span className="absolute left-4 top-1/2 -translate-y-1/2">
-                        <FiLock size={18} className={pwFocused ? 'text-blue-400 font-bold' : 'text-blue-900 font-bold'} />
-                      </span>
-                      <input
-                        type={showPass ? "text" : "password"}
-                        value={password}
-                        onChange={e => setPassword(e.target.value)}
-                        onFocus={() => setPwFocused(true)}
-                        onBlur={() => setPwFocused(false)}
-                        required
-                        autoComplete="current-password"
-                        placeholder="••••••••••"
-                        className="w-full pl-12 pr-12 py-5 bg-slate-800/50 text-white text-sm placeholder:text-white/20 outline-none transition-colors duration-300"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowPass(v => !v)}
-                        tabIndex={-1}
-                        className="absolute right-4 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60 transition-colors"
-                      >
-                        {showPass ? <FiEyeOff size={18} className="text-blue-900 font-bold" /> : <FiEye size={18} className="text-blue-700 font-bold" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Submit button */}
-                  <motion.button
-                    type="submit"
-                    disabled={loading || !identifier || !password}
-                    className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4 relative overflow-hidden transition-all duration-300"
-                    style={{
-                      background: loading || !identifier || !password
-                        ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
-                        : 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                      cursor: loading || !identifier || !password ? "not-allowed" : "pointer",
-                    }}
-                    whileHover={{ scale: loading || !identifier || !password ? 1 : 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    {loading ? (
-                      <>
-                        <motion.span
-                          className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
-                          animate={{ rotate: 360 }}
-                          transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }}
-                        />
-                        <span>AUTHENTICATING...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>AUTHENTICATE</span>
-                        <FiArrowRight size={18} />
-                      </>
-                    )}
-                  </motion.button>
-                </form>
-              ) : (
-                /* ── OTP verification step ── */
-                <form onSubmit={handleOtpSubmit} className="space-y-6">
-                  <div className="rounded-2xl px-5 py-4 text-center"
-                    style={{ background: "rgba(59,130,246,0.06)", border: "1px solid rgba(59,130,246,0.2)" }}>
-                    <div className="text-[10px] font-bold tracking-[2px] text-blue-400 mb-1">VERIFICATION CODE SENT</div>
-                    <div className="text-xs text-slate-400">Check email: <span className="text-white font-semibold">{emailHint}</span></div>
-                  </div>
-
-                  <div>
-                    <label className="block mb-3 text-[12px] font-medium tracking-[0.1em] text-white/75">
-                      6-DIGIT CODE
-                    </label>
-                    <div className="relative rounded-2xl overflow-hidden ring-1 ring-white/[0.08] focus-within:ring-2 focus-within:ring-blue-500/50 transition-all duration-300">
-                      <input
-                        type="text"
-                        value={otp}
-                        onChange={e => setOtp(e.target.value.replace(/\D/g, "").slice(0, 6))}
-                        required
-                        autoFocus
-                        maxLength={6}
-                        placeholder="000000"
-                        className="w-full px-5 py-5 bg-slate-800/50 text-white text-2xl font-black tracking-[0.4em] text-center placeholder:text-white/20 outline-none"
-                      />
-                    </div>
-                    <p className="mt-2 text-[10px] text-slate-500 text-center">Code expires in 10 minutes</p>
-                  </div>
-
-                  <motion.button
-                    type="submit"
-                    disabled={loading || otp.length < 6}
-                    className="w-full flex items-center justify-center gap-3 rounded-2xl text-white font-bold tracking-[0.15em] text-sm py-4"
-                    style={{
-                      background: loading || otp.length < 6
-                        ? 'linear-gradient(135deg, rgba(59,130,246,0.3), rgba(37,99,235,0.3))'
-                        : 'linear-gradient(135deg, #3b82f6, #2563eb)',
-                      cursor: loading || otp.length < 6 ? "not-allowed" : "pointer",
-                    }}
-                    whileTap={{ scale: 0.98 }}
-                  >
-                    {loading ? (
-                      <>
-                        <motion.span className="w-5 h-5 rounded-full border-2 border-white/30 border-t-white"
-                          animate={{ rotate: 360 }} transition={{ duration: 0.8, repeat: Infinity, ease: "linear" }} />
-                        <span>VERIFYING...</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>VERIFY & ACCESS</span>
-                        <FiArrowRight size={18} />
-                      </>
-                    )}
-                  </motion.button>
-
-                  <button type="button" onClick={() => { setStep("credentials"); setError(""); setOtp(""); }}
-                    className="w-full text-[11px] text-slate-500 hover:text-slate-300 transition-colors bg-transparent border-none cursor-pointer">
-                    ← Back to login
-                  </button>
-                </form>
-              )}
-
-              {/* Footer */}
-              <div className="mt-8 pt-6 flex items-center justify-center gap-3 border-t border-white/[0.06]">
-                <motion.span
-                  className="w-2 h-2 rounded-full bg-emerald-400"
-                  animate={{ opacity: [1, 0.2, 1] }}
-                  transition={{ duration: 2, repeat: Infinity }}
-                />
-                <span className="text-[10px] tracking-[0.2em] text-white/75">ENCRYPTED · AUTHORIZED PERSONNEL ONLY</span>
               </div>
-            </div>
+
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <label style={{ color: "#374151", fontSize: 9, letterSpacing: 2 }}>
+                    PASSWORD
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setShowPass(!showPass)}
+                    style={{
+                      background: "none", border: "none", cursor: "pointer",
+                      color: "#1f2d1f", fontSize: 9, letterSpacing: 1,
+                      fontFamily: "'JetBrains Mono', monospace", padding: 0,
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = "#16a34a")}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = "#1f2d1f")}
+                  >
+                    {showPass ? "◉ HIDE" : "◎ SHOW"}
+                  </button>
+                </div>
+                <input
+                  type={showPass ? "text" : "password"}
+                  required
+                  autoComplete="current-password"
+                  value={form.password}
+                  placeholder="••••••••••••"
+                  onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  style={{
+                    width: "100%", padding: "11px 14px",
+                    background: "#040804", border: "1px solid #152015",
+                    color: "#d1fae5", fontSize: 12, letterSpacing: 2,
+                    outline: "none", boxSizing: "border-box",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    transition: "border-color 0.15s",
+                  }}
+                  onFocus={(e) => {
+                    e.target.style.borderColor = "#16a34a";
+                    e.target.style.boxShadow = "0 0 0 1px #16a34a20";
+                  }}
+                  onBlur={(e) => {
+                    e.target.style.borderColor = "#152015";
+                    e.target.style.boxShadow = "none";
+                  }}
+                />
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading}
+                style={{
+                  width: "100%", padding: "13px",
+                  background: loading ? "#052e16" : "#16a34a",
+                  border: "none", cursor: loading ? "not-allowed" : "pointer",
+                  color: loading ? "#22c55e" : "#000",
+                  fontSize: 11, fontWeight: 700, letterSpacing: 3,
+                  fontFamily: "'JetBrains Mono', monospace",
+                  display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
+                  marginTop: 8, transition: "background 0.15s",
+                }}
+                onMouseEnter={(e) => { if (!loading) (e.currentTarget as HTMLButtonElement).style.background = "#22c55e"; }}
+                onMouseLeave={(e) => { if (!loading) (e.currentTarget as HTMLButtonElement).style.background = "#16a34a"; }}
+              >
+                {loading
+                  ? <><Spinner /> AUTHENTICATING...</>
+                  : "ACCESS SYSTEM"
+                }
+              </button>
+            </form>
           </div>
 
-          {/* Additional info */}
-          <p className="mt-6 text-center text-xs text-white/70 tracking-wide">
-            Need help? Contact your system administrator
-          </p>
-        </motion.div>
-      </motion.div>
+          {/* Status indicators */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 1, marginTop: 1 }}>
+            {[
+              { label: "UPLINK",  value: "ACTIVE",  green: true  },
+              { label: "ENCRYPT", value: "AES-256", green: true  },
+              { label: "ACCESS",  value: "RESTRICTED", green: false },
+            ].map(({ label, value, green }) => (
+              <div key={label} style={{
+                background: "rgba(2,6,2,0.8)", border: "1px solid #0f1f0f",
+                padding: "8px 10px", textAlign: "center",
+              }}>
+                <div style={{ color: "#1f2d1f", fontSize: 7, letterSpacing: 2, marginBottom: 3 }}>{label}</div>
+                <div style={{ color: green ? "#16a34a" : "#f59e0b", fontSize: 9, letterSpacing: 1, fontWeight: 700 }}>{value}</div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ textAlign: "center", marginTop: 20 }}>
+            <span style={{ color: "#0f1f0f", fontSize: 9, letterSpacing: 2 }}>
+              UNAUTHORIZED ACCESS IS PROHIBITED
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .lg-flex { display: none !important; }
+        @media (min-width: 1024px) { .lg-flex { display: flex !important; } }
+      `}</style>
     </div>
+  );
+}
+
+function Spinner() {
+  return (
+    <span style={{
+      display: "inline-block", width: 10, height: 10,
+      border: "2px solid #22c55e", borderTopColor: "transparent",
+      borderRadius: "50%", animation: "spin 0.7s linear infinite",
+    }} />
   );
 }

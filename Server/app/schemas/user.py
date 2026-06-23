@@ -1,43 +1,45 @@
-# app/schemas/user.py
-from pydantic import BaseModel, EmailStr, Field
-from typing import Optional, List
+import uuid
 from datetime import datetime
-from uuid import UUID
+from pydantic import BaseModel, EmailStr
+from typing import Optional
+from app.models.user import UserRole
+
 
 class UserBase(BaseModel):
     email: EmailStr
     username: str
-    full_name: Optional[str] = None
+    full_name: str
     phone: Optional[str] = None
-    role: Optional[str] = "field_unit"
 
-class UserCreate(UserBase):
-    password: str = Field(..., min_length=8)
-    team_id: Optional[UUID] = None
-    team_role: Optional[str] = None  # lead, medic, scout, support, sniper
+
+class UserResponse(BaseModel):
+    id: uuid.UUID
+    email: str
+    username: str
+    full_name: str
+    role: UserRole
+    phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+    is_active: bool
+    is_verified: bool
+    last_seen: Optional[datetime] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
 
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
-    role: Optional[str] = None
-    is_active: Optional[bool] = None
+    username: Optional[str] = None
 
-class UserResponse(UserBase):
-    id: UUID
-    is_active: bool
-    is_verified: bool
-    profile_picture_url: Optional[str] = None
-    last_login: Optional[datetime]
-    created_at: datetime
-    updated_at: datetime
-    team: Optional[dict] = None
-    team_role: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+class UserRoleUpdate(BaseModel):
+    role: UserRole
+
 
 class UserListResponse(BaseModel):
+    users: list[UserResponse]
     total: int
-    items: List[UserResponse]
     page: int
-    size: int
+    page_size: int

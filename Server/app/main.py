@@ -7,11 +7,12 @@ import asyncio
 
 from app.config import settings
 from app.database import init_db
-from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence, live_sessions, admin
+from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence, live_sessions, admin, missions, contacts, drawings, notifications, sos, geofences, packages, playback
 from fastapi.staticfiles import StaticFiles
-from app.websocket import location_ws, event_ws, message_ws, video_ws
+from app.websocket import location_ws, event_ws, message_ws, video_ws, notification_ws
 from app.middleware.cors import setup_cors
 from app.websocket.manager import manager
+from app.middleware.audit import AuditMiddleware
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -68,6 +69,9 @@ app = FastAPI(
 # Setup CORS
 setup_cors(app)
 
+# Setup audit logging
+app.add_middleware(AuditMiddleware)
+
 # Health check endpoints
 @app.get("/")
 async def root():
@@ -99,6 +103,14 @@ app.include_router(zones.router, prefix="/api/v1")
 app.include_router(evidence.router, prefix="/api/v1")
 app.include_router(live_sessions.router, prefix="/api/v1")
 app.include_router(admin.router, prefix="/api/v1")
+app.include_router(missions.router, prefix="/api/v1")
+app.include_router(contacts.router, prefix="/api/v1")
+app.include_router(drawings.router, prefix="/api/v1")
+app.include_router(notifications.router, prefix="/api/v1")
+app.include_router(sos.router, prefix="/api/v1")
+app.include_router(geofences.router, prefix="/api/v1")
+app.include_router(packages.router, prefix="/api/v1")
+app.include_router(playback.router, prefix="/api/v1")
 
 # Serve uploaded files
 import os
@@ -112,6 +124,7 @@ app.include_router(location_ws.router)
 app.include_router(event_ws.router)
 app.include_router(message_ws.router)
 app.include_router(video_ws.router)
+app.include_router(notification_ws.router)
 
 # Error handlers
 @app.exception_handler(Exception)

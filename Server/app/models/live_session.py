@@ -1,20 +1,22 @@
-from sqlalchemy import Column, String, DateTime, Boolean, Float, UUID
-from sqlalchemy.sql import func
 import uuid
+from datetime import datetime
+from sqlalchemy import String, Boolean, DateTime, ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
 
 
 class LiveSession(Base):
     __tablename__ = "live_sessions"
 
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    room_id = Column(String(255), nullable=False, index=True)
-    initiator_name = Column(String(255), default="Unknown")
-    team_name = Column(String(255), default="")
-    lat = Column(Float, nullable=True)
-    lng = Column(Float, nullable=True)
-    saved = Column(Boolean, default=False)
-    duration_seconds = Column(Float, nullable=True)
-    video_file_path = Column(String(500), nullable=True)
-    started_at = Column(DateTime(timezone=True), server_default=func.now())
-    ended_at = Column(DateTime(timezone=True), nullable=True)
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    host_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    room_id: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    stream_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    viewer_count: Mapped[int] = mapped_column(default=0)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("teams.id", ondelete="SET NULL"), nullable=True)
+    mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    ended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,142 +1,112 @@
-import 'package:flutter/material.dart';
-import '../models/user_model.dart';
-import '../services/auth_service.dart';
+import 'dart:convert';
+import 'package:flutter/foundation.dart';
+import '../models/user.dart';
+import '../services/api_service.dart';
+import '../services/storage_service.dart';
+
+enum AuthStatus { unknown, authenticated, unauthenticated }
 
 class AuthProvider extends ChangeNotifier {
-  final AuthService _authService = AuthService();
+  AuthStatus _status = AuthStatus.unknown;
+  User? _user;
+  String? _error;
 
-  UserModel? _user;
-  bool _isLoading = false;
-  bool _isAuthenticated = false;
-  String? _errorMessage;
-  String? _pendingSessionId;
-  String? _pendingEmailHint;
+  AuthStatus get status => _status;
+  User? get user => _user;
+  String? get error => _error;
+  bool get isAuthenticated => _status == AuthStatus.authenticated;
 
-  UserModel? get user => _user;
-  bool get isLoading => _isLoading;
-  bool get isAuthenticated => _isAuthenticated;
-  String? get errorMessage => _errorMessage;
-  String? get pendingSessionId => _pendingSessionId;
-  String? get pendingEmailHint => _pendingEmailHint;
+  final _api = ApiService();
+  final _storage = StorageService();
 
-  Future<void> checkAuthStatus() async {
-    final isLoggedIn = await _authService.isLoggedIn();
-    if (isLoggedIn) {
-      _user = await _authService.getCurrentUser();
-      _isAuthenticated = true;
-      notifyListeners();
-      // Refresh profile from server to get latest team info
-      _authService
-          .refreshUserProfile()
-          .then((fresh) {
-            if (fresh != null) {
-              _user = fresh;
-              notifyListeners();
-            }
-          })
-          .catchError((_) {});
-    } else {
-      notifyListeners();
-    }
+  AuthProvider() {
+    _restoreSession();
   }
 
-  Future<bool?> login(String username, String password) async {
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    final result = await _authService.login(username, password);
-
-    _isLoading = false;
-
-    if (result['otp_required'] == true) {
-      _pendingSessionId = result['session_id'] as String?;
-      _pendingEmailHint = result['email_hint'] as String?;
-      notifyListeners();
-      return null;
-    }
-
-    if (result['success'] == true) {
-      _user = result['user'];
-      _isAuthenticated = true;
-      _pendingSessionId = null;
-      _pendingEmailHint = null;
-      notifyListeners();
-      return true;
-    } else {
-      _errorMessage = result['message'];
-      notifyListeners();
-      return false;
-    }
-  }
-
-  Future<bool> verifyOtp(String otp) async {
-    final sessionId = _pendingSessionId;
-    if (sessionId == null || sessionId.isEmpty) {
-      _errorMessage = 'OTP session expired. Please log in again.';
-      notifyListeners();
-      return false;
-    }
-
-    _isLoading = true;
-    _errorMessage = null;
-    notifyListeners();
-
-    final result = await _authService.verifyOtp(sessionId, otp);
-
-    _isLoading = false;
-    if (result['success'] == true) {
-      _user = result['user'];
-      _isAuthenticated = true;
-      clearOtpState();
-      notifyListeners();
-      return true;
-    }
-
-    _errorMessage = result['message'];
-    notifyListeners();
-    return false;
-  }
-
-  /// Refresh user info from the server (/auth/me) and update in-memory user.
-  Future<void> loadUserInfo() async {
-    try {
-      final fresh = await _authService.refreshUserProfile();
-      if (fresh != null) {
-        _user = fresh;
+  Future<void> _restoreSession() async {
+    final userJson = _storage.userJson;
+    final token = _storage.accessToken;
+    if (userJson != null && token != null) {
+      try {
+        _user = User.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
+        _status = AuthStatus.authenticated;
         notifyListeners();
+        await _refreshMe();
+      } catch (_) {
+        await logout();
       }
+    } else {
+      _status = AuthStatus.unauthenticated;
+      notifyListeners();
+    }
+  }
+
+  Future<void> _refreshMe() async {
+    try {
+      final data = await _api.get('/auth/me') as Map<String, dynamic>;
+      _user = User.fromJson(data);
+      await _storage.setString('user_json', jsonEncode(_user!.toJson()));
+      notifyListeners();
     } catch (_) {}
   }
 
-  Future<void> logout() async {
-    await _authService.logout();
-    _user = null;
-    _isAuthenticated = false;
-    clearOtpState();
+  Future<bool> login(String email, String password) async {
+    _error = null;
+    notifyListeners();
+    try {
+      final data = await _api.post('/auth/login', {'email': email, 'password': password});
+      _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      await _storage.saveAuth(
+        accessToken: data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String,
+        userJson: jsonEncode(_user!.toJson()),
+      );
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> enrollWithVoucher(String code) async {
+    _error = null;
+    try {
+      final data = await _api.post('/auth/enroll/voucher', {'code': code});
+      _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      await _storage.saveAuth(
+        accessToken: data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String,
+        userJson: jsonEncode(_user!.toJson()),
+      );
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<bool> enrollWithQR(String code) async => enrollWithVoucher(code);
+
+  Future<void> updateUser(User updated) async {
+    _user = updated;
+    await _storage.setString('user_json', jsonEncode(updated.toJson()));
     notifyListeners();
   }
 
-  void clearOtpState() {
-    _pendingSessionId = null;
-    _pendingEmailHint = null;
-  }
-
-  String getHomeRoute() {
-    if (_user == null) return '/login';
-
-    switch (_user!.role) {
-      case 'super_admin':
-      case 'admin':
-      case 'commander':
-        return '/commander/home';
-      case 'operator':
-        return '/operator/home';
-      case 'field_unit':
-        return '/field/tactical';
-      case 'viewer':
-      default:
-        return '/viewer/home';
+  Future<void> logout() async {
+    final refresh = _storage.refreshToken;
+    if (refresh != null) {
+      _api.post('/auth/logout', {'refresh_token': refresh}).catchError((_) => <String, dynamic>{});
     }
+    await _storage.clearAuth();
+    _user = null;
+    _status = AuthStatus.unauthenticated;
+    notifyListeners();
   }
 }

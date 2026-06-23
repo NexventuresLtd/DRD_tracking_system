@@ -1,201 +1,110 @@
-import 'package:flutter/foundation.dart';
-import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
-import '../config/constants.dart';
 import 'storage_service.dart';
+import '../config/environment.dart';
+
+class ApiException implements Exception {
+  final int statusCode;
+  final String message;
+  ApiException(this.statusCode, this.message);
+  @override
+  String toString() => 'ApiException($statusCode): $message';
+}
 
 class ApiService {
-  final StorageService _storage = StorageService();
-  Future<bool>? _refreshFuture;
+  static final ApiService _instance = ApiService._internal();
+  factory ApiService() => _instance;
+  ApiService._internal();
 
-  /// Builds a URI, ensuring the path has a trailing slash before any query
-  /// string — this matches FastAPI's default routing conventions and avoids
-  /// 307 redirects that lose the POST body.
-  Uri _uri(String endpoint) {
-    final qi = endpoint.indexOf('?');
-    final path = qi >= 0 ? endpoint.substring(0, qi) : endpoint;
-    final query = qi >= 0 ? endpoint.substring(qi) : '';
-    final normalised = path.endsWith('/') ? path : '$path/';
-    return Uri.parse('${AppConstants.baseUrl}$normalised$query');
-  }
+  final _storage = StorageService();
 
-  Future<Map<String, String>> _getHeaders() async {
-    final token = await _storage.getToken();
+  String get _base => '${EnvironmentConfig.apiBaseUrl}/api/v1';
+
+  Map<String, String> _headers({bool multipart = false}) {
+    final token = _storage.accessToken;
     return {
-      'Content-Type': 'application/json',
-      if (token != null) 'Authorization': 'Bearer $token',
+      if (!multipart) HttpHeaders.contentTypeHeader: 'application/json',
+      HttpHeaders.acceptHeader: 'application/json',
+      if (token != null) HttpHeaders.authorizationHeader: 'Bearer $token',
     };
   }
 
-  Future<dynamic> get(String endpoint) async {
-    try {
-      final response = await http.get(
-        _uri(endpoint),
-        headers: await _getHeaders(),
-      );
-      if (response.statusCode == 200) return jsonDecode(response.body);
-      if (response.statusCode == 401) {
-        await _refreshToken();
-        return get(endpoint);
-      }
-      throw Exception('Failed to load data: ${response.statusCode}');
-    } catch (e) {
-      debugPrint('GET Error: $e');
-      return null;
+  Future<Map<String, dynamic>> _handleResponse(http.Response res) async {
+    if (res.statusCode == 401) {
+      final refreshed = await _tryRefresh();
+      if (!refreshed) throw ApiException(401, 'Unauthorized');
     }
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    if (res.statusCode >= 400) {
+      throw ApiException(res.statusCode, body['detail']?.toString() ?? 'Error');
+    }
+    return body;
   }
 
-  Future<dynamic> post(String endpoint, Map<String, dynamic> data) async {
+  Future<bool> _tryRefresh() async {
+    final refresh = _storage.refreshToken;
+    if (refresh == null) return false;
     try {
-      final response = await http.post(
-        _uri(endpoint),
-        headers: await _getHeaders(),
-        body: jsonEncode(data),
+      final res = await http.post(
+        Uri.parse('$_base/auth/refresh'),
+        headers: {HttpHeaders.contentTypeHeader: 'application/json'},
+        body: jsonEncode({'refresh_token': refresh}),
       );
-      if (response.statusCode == 201 || response.statusCode == 200) {
-        return response.body.isNotEmpty ? jsonDecode(response.body) : {};
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        await _storage.setString('access_token', data['access_token'] as String);
+        await _storage.setString('refresh_token', data['refresh_token'] as String);
+        return true;
       }
-      if (response.statusCode == 401) {
-        await _refreshToken();
-        return post(endpoint, data);
-      }
-      throw Exception(
-        'Failed to create: ${response.statusCode} — ${response.body}',
-      );
-    } catch (e) {
-      debugPrint('POST Error: $e');
-      return null;
-    }
+    } catch (_) {}
+    return false;
   }
 
-  Future<dynamic> registerWithInvite(Map<String, dynamic> data) =>
-      post('/auth/register', data);
-
-  Future<dynamic> put(String endpoint, [Map<String, dynamic>? data]) async {
-    try {
-      final response = await http.put(
-        _uri(endpoint),
-        headers: await _getHeaders(),
-        body: data != null ? jsonEncode(data) : null,
-      );
-      if (response.statusCode == 200) {
-        return response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      }
-      if (response.statusCode == 401) {
-        await _refreshToken();
-        return put(endpoint, data);
-      }
-      throw Exception('Failed to update: ${response.statusCode}');
-    } catch (e) {
-      debugPrint('PUT Error: $e');
-      return null;
-    }
-  }
-
-  Future<dynamic> delete(String endpoint) async {
-    try {
-      final response = await http.delete(
-        _uri(endpoint),
-        headers: await _getHeaders(),
-      );
-      if (response.statusCode == 200 || response.statusCode == 204) {
-        return response.body.isNotEmpty ? jsonDecode(response.body) : {};
-      }
-      if (response.statusCode == 401) {
-        await _refreshToken();
-        return delete(endpoint);
-      }
-      throw Exception('Failed to delete: ${response.statusCode}');
-    } catch (e) {
-      debugPrint('DELETE Error: $e');
-      return null;
-    }
-  }
-
-  Future<dynamic> updateRoute(String routeId, Map<String, dynamic> data) =>
-      put('/routes/$routeId', data);
-
-  Future<dynamic> startRouteFollow(Map<String, dynamic> data) =>
-      post('/route-follow-sessions/start', data);
-
-  Future<dynamic> stopRouteFollow(
-    String sessionId, [
-    Map<String, dynamic>? data,
-  ]) => post(
-    '/route-follow-sessions/$sessionId/stop',
-    data ?? <String, dynamic>{},
-  );
-
-  Future<dynamic> completeRouteFollow(
-    String sessionId, [
-    Map<String, dynamic>? data,
-  ]) => post(
-    '/route-follow-sessions/$sessionId/complete',
-    data ?? <String, dynamic>{},
-  );
-
-  Future<dynamic> getMyRouteFollowSession() => get('/route-follow-sessions/me');
-
-  Future<dynamic> listRouteFollowSessions([
-    Map<String, dynamic>? params,
-  ]) => get(
-    '/route-follow-sessions${params == null ? '' : '?${Uri(queryParameters: params.map((k, v) => MapEntry(k, v.toString()))).query}'}',
-  );
-
-  Future<void> _refreshToken() async {
-    // Serialize concurrent refresh attempts so only one network call is made.
-    if (_refreshFuture != null) {
-      await _refreshFuture;
-      return;
-    }
-
-    final completer = Completer<bool>();
-    _refreshFuture = completer.future;
-    try {
-      final refreshToken = await _storage.getRefreshToken();
-      if (refreshToken == null) {
-        completer.complete(false);
-        return;
-      }
-
-      final response = await http.post(
-        _uri('/auth/refresh'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'refresh_token': refreshToken}),
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        await _storage.saveToken(data['access_token']);
-        if (data['refresh_token'] != null) {
-          await _storage.saveRefreshToken(data['refresh_token']);
-        }
-        completer.complete(true);
-        return;
-      }
-      completer.complete(false);
-    } catch (e) {
-      debugPrint('Refresh Token Error: $e');
-      completer.complete(false);
-    } finally {
-      _refreshFuture = null;
-    }
-  }
-
-  Future<dynamic> uploadAvatar(String filePath) async {
-    final token = await _storage.getToken();
-    if (token == null) throw Exception('Not authenticated');
-    final request = http.MultipartRequest(
-      'POST',
-      Uri.parse('${AppConstants.baseUrl}/auth/upload-avatar/'),
+  Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
+    final res = await http.post(
+      Uri.parse('$_base$path'),
+      headers: _headers(),
+      body: jsonEncode(body),
     );
-    request.headers['Authorization'] = 'Bearer $token';
-    request.files.add(await http.MultipartFile.fromPath('file', filePath));
-    final streamed = await request.send();
-    final response = await http.Response.fromStream(streamed);
-    if (response.statusCode == 200) {
-      return jsonDecode(response.body);
+    return _handleResponse(res);
+  }
+
+  Future<dynamic> get(String path, {Map<String, String>? params}) async {
+    final uri = Uri.parse('$_base$path').replace(queryParameters: params);
+    final res = await http.get(uri, headers: _headers());
+    if (res.statusCode == 401) {
+      final refreshed = await _tryRefresh();
+      if (!refreshed) throw ApiException(401, 'Unauthorized');
     }
-    throw Exception('Upload failed: ${response.body}');
+    final body = jsonDecode(res.body);
+    if (res.statusCode >= 400) {
+      throw ApiException(res.statusCode, (body as Map)['detail']?.toString() ?? 'Error');
+    }
+    return body;
+  }
+
+  Future<Map<String, dynamic>> put(String path, Map<String, dynamic> body) async {
+    final res = await http.put(
+      Uri.parse('$_base$path'),
+      headers: _headers(),
+      body: jsonEncode(body),
+    );
+    return _handleResponse(res);
+  }
+
+  Future<Map<String, dynamic>> delete(String path) async {
+    final res = await http.delete(Uri.parse('$_base$path'), headers: _headers());
+    return _handleResponse(res);
+  }
+
+  Future<Map<String, dynamic>> uploadFile(String path, File file, String fieldName) async {
+    final token = _storage.accessToken;
+    final req = http.MultipartRequest('POST', Uri.parse('$_base$path'));
+    if (token != null) req.headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
+    req.files.add(await http.MultipartFile.fromPath(fieldName, file.path));
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    return _handleResponse(res);
   }
 }

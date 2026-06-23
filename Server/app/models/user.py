@@ -1,46 +1,65 @@
-# app/models/user.py
-from sqlalchemy import Column, String, Boolean, DateTime, ForeignKey, UUID, Enum as SQLEnum
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
-from app.database import Base
 import enum
+from datetime import datetime
+from sqlalchemy import String, Boolean, DateTime, Enum, ForeignKey, Text
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.dialects.postgresql import UUID
+from app.database import Base
+
 
 class UserRole(str, enum.Enum):
-    SUPER_ADMIN = "super_admin"
-    ADMIN = "admin"
-    COMMANDER = "commander"
-    OPERATOR = "operator"
-    VIEWER = "viewer"
-    FIELD_UNIT = "field_unit"
+    operations_coordinator = "operations_coordinator"
+    planning_officer = "planning_officer"
+    team_leader = "team_leader"
+    field_user = "field_user"
+
 
 class User(Base):
     __tablename__ = "users"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    email = Column(String(255), unique=True, nullable=False, index=True)
-    username = Column(String(100), unique=True, nullable=False, index=True)
-    hashed_password = Column(String(255), nullable=False)
-    full_name = Column(String(200))
-    role = Column(SQLEnum(UserRole), default=UserRole.FIELD_UNIT)
-    phone = Column(String(20))
-    profile_picture_url = Column(String(500), nullable=True)
-    is_active = Column(Boolean, default=True)
-    is_verified = Column(Boolean, default=False)
-    last_login = Column(DateTime(timezone=True))
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
-    # Relationships - use string references to avoid circular imports
-    team_memberships = relationship("TeamMember", back_populates="user")
-    locations = relationship("Location", back_populates="user")
-    location_history = relationship("LocationHistory", back_populates="user")
-    created_routes = relationship("Route", back_populates="created_by_user", foreign_keys="Route.created_by")
-    assigned_routes = relationship("Route", back_populates="assigned_user", foreign_keys="Route.assigned_user_id")
-    sent_messages = relationship("Message", back_populates="sender", foreign_keys="Message.from_user_id")
-    received_messages = relationship("Message", back_populates="recipient", foreign_keys="Message.to_user_id")
-    created_pois = relationship("POI", back_populates="creator")
-    created_zones = relationship("Zone", back_populates="creator")
-    user_flags = relationship("UserFlag", back_populates="user", foreign_keys="UserFlag.user_id")
-    notifications = relationship("Notification", back_populates="user")
-    audit_logs = relationship("AuditLog", back_populates="user")
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    username: Mapped[str] = mapped_column(String(100), unique=True, nullable=False, index=True)
+    full_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False, default=UserRole.field_user)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    is_verified: Mapped[bool] = mapped_column(Boolean, default=False)
+    last_seen: Mapped[datetime | None] = mapped_column("last_login", DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    sessions: Mapped[list["UserSession"]] = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    devices: Mapped[list["UserDevice"]] = relationship("UserDevice", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    refresh_token: Mapped[str] = mapped_column(String(500), unique=True, nullable=False)
+    device_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    device_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ip_address: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    user: Mapped["User"] = relationship("User", back_populates="sessions")
+
+
+class UserDevice(Base):
+    __tablename__ = "user_devices"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    device_token: Mapped[str] = mapped_column(String(500), nullable=False)
+    platform: Mapped[str] = mapped_column(String(20), nullable=False)  # ios, android, web
+    device_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    user: Mapped["User"] = relationship("User", back_populates="devices")

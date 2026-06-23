@@ -1,71 +1,42 @@
-# app/models/location.py
-from sqlalchemy import Column, String, Float, Integer, DateTime, ForeignKey, UUID, JSON
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
 import uuid
+import enum
+from datetime import datetime
+from sqlalchemy import String, Float, DateTime, Enum, ForeignKey
+from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
+
+
+class LocationStatus(str, enum.Enum):
+    active = "active"
+    stale = "stale"
+    offline = "offline"
+
 
 class Location(Base):
     __tablename__ = "locations"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    team_id = Column(UUID(as_uuid=True), ForeignKey("teams.id"))
-    
-    # GPS Data
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    altitude = Column(Float)  # meters
-    
-    # Movement Data
-    speed = Column(Float)  # km/h
-    heading = Column(Float)  # degrees
-    accuracy = Column(Float)  # meters
-    
-    # Accelerometer Data (m/s²)
-    accel_x = Column(Float)
-    accel_y = Column(Float)
-    accel_z = Column(Float)
-    
-    # Gyroscope Data (rad/s)
-    gyro_x = Column(Float)
-    gyro_y = Column(Float)
-    gyro_z = Column(Float)
-    
-    # Device Info
-    battery_level = Column(Integer)
-    device_info = Column(JSON)
-    status = Column(String(20), default="active")  # active, stale, offline
-    
-    recorded_at = Column(DateTime(timezone=True), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    user = relationship("User", back_populates="locations")
-    team = relationship("Team", back_populates="locations")
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    altitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heading: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[LocationStatus] = mapped_column(Enum(LocationStatus), default=LocationStatus.active)
+    last_update: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
 
 class LocationHistory(Base):
     __tablename__ = "location_history"
-    
-    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True)
-    
-    latitude = Column(Float, nullable=False)
-    longitude = Column(Float, nullable=False)
-    altitude = Column(Float)
-    speed = Column(Float)
-    heading = Column(Float)
-    
-    # Accelerometer & Gyroscope
-    accel_x = Column(Float)
-    accel_y = Column(Float)
-    accel_z = Column(Float)
-    gyro_x = Column(Float)
-    gyro_y = Column(Float)
-    gyro_z = Column(Float)
-    
-    recorded_at = Column(DateTime(timezone=True), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
-    # Relationships
-    user = relationship("User", back_populates="location_history")
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    altitude: Mapped[float | None] = mapped_column(Float, nullable=True)
+    heading: Mapped[float | None] = mapped_column(Float, nullable=True)
+    speed: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accuracy: Mapped[float | None] = mapped_column(Float, nullable=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)

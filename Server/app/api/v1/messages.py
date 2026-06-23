@@ -1,307 +1,139 @@
-# app/api/v1/messages.py
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+import uuid
+from typing import Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, or_, and_
-from typing import Optional, List
-from uuid import UUID
-from datetime import datetime, timezone
-from pydantic import BaseModel, Field
+from sqlalchemy import select, and_, or_
+from pydantic import BaseModel
+from datetime import datetime
 
 from app.database import get_db
+from app.middleware.auth import get_current_user
 from app.models.user import User
-from app.models.message import Message
-from app.models.team import Team, TeamMember
-from app.middleware.auth import get_current_user, require_any_user
+from app.models.message import Message, MessageRead, MessageChannel, MessageType
 from app.websocket.manager import manager
-import asyncio
-
-class MessageSend(BaseModel):
-    to_user_id: Optional[UUID] = None
-    to_team_id: Optional[UUID] = None
-    to_all: bool = False
-    content: str = Field(..., min_length=1, max_length=5000)
-    priority: str = "normal"
-
-class MessageResponse(BaseModel):
-    id: UUID
-    from_user_id: UUID
-    to_user_id: Optional[UUID]
-    to_team_id: Optional[UUID]
-    to_all: bool
-    content: str
-    priority: str
-    is_read: bool
-    read_at: Optional[datetime]
-    created_at: datetime
-    from_user_name: Optional[str] = None
-    
-    class Config:
-        from_attributes = True
-
-class MessageListResponse(BaseModel):
-    total: int
-    items: List[MessageResponse]
-    page: int
-    size: int
-    unread_count: int
 
 router = APIRouter(prefix="/messages", tags=["Messages"])
 
-@router.get("/", response_model=MessageListResponse)
-async def list_messages(
-    page: int = Query(1, ge=1),
-    size: int = Query(30, ge=1, le=100),
-    is_read: Optional[bool] = None,
-    priority: Optional[str] = None,
+
+class MessageCreate(BaseModel):
+    channel_type: MessageChannel
+    channel_id: Optional[str] = None
+    content: str
+    message_type: MessageType = MessageType.text
+    reply_to_id: Optional[uuid.UUID] = None
+
+
+@router.get("/channels")
+async def list_channels(current_user: User = Depends(get_current_user)):
+    return [
+        {"type": "global", "id": "global", "name": "Global Channel"},
+        {"type": "emergency", "id": "emergency", "name": "Emergency Channel"},
+    ]
+
+
+@router.get("/global")
+async def get_global_messages(
+    limit: int = Query(50, ge=1, le=200),
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """List messages for current user"""
-    # Commanders and operators see ALL messages (they oversee everyone).
-    # Field units only see messages involving themselves or their teams.
-    is_supervisor = current_user.role.value in ("admin", "commander", "operator")
-
-    if is_supervisor:
-        query = select(Message)
-        count_query = select(func.count(Message.id))
-    else:
-        recipient_clause = or_(
-            Message.to_user_id == current_user.id,
-            Message.from_user_id == current_user.id,
-            Message.to_all == True,
-            Message.to_team_id.in_(
-                select(TeamMember.team_id).where(
-                    TeamMember.user_id == current_user.id,
-                    TeamMember.is_active == True,
-                )
-            ),
-        )
-        query = select(Message).where(recipient_clause)
-        count_query = select(func.count(Message.id)).where(recipient_clause)
-
-    if is_read is not None:
-        query = query.where(Message.is_read == is_read)
-        count_query = count_query.where(Message.is_read == is_read)
-
-    if priority:
-        query = query.where(Message.priority == priority)
-        count_query = count_query.where(Message.priority == priority)
-
-    # Get unread count (messages addressed to me that I haven't read)
-    if is_supervisor:
-        unread_query = select(func.count(Message.id)).where(
-            or_(
-                Message.to_user_id == current_user.id,
-                Message.to_all == True,
-            ),
-            Message.is_read == False,
-        )
-    else:
-        unread_query = select(func.count(Message.id)).where(
-            or_(
-                Message.to_user_id == current_user.id,
-                Message.to_all == True,
-                Message.to_team_id.in_(
-                    select(TeamMember.team_id).where(
-                        TeamMember.user_id == current_user.id,
-                        TeamMember.is_active == True,
-                    )
-                ),
-            ),
-            Message.is_read == False,
-        )
-    unread_result = await db.execute(unread_query)
-    unread_count = unread_result.scalar()
-    
-    # Get total count
-    count_result = await db.execute(count_query)
-    total = count_result.scalar()
-    
-    # Get paginated results
-    query = query.order_by(Message.created_at.desc())
-    query = query.offset((page - 1) * size).limit(size)
-    
-    result = await db.execute(query)
-    messages = result.scalars().all()
-    
-    items = []
-    for msg in messages:
-        # Get sender name
-        sender_result = await db.execute(
-            select(User).where(User.id == msg.from_user_id)
-        )
-        sender = sender_result.scalar_one_or_none()
-        
-        items.append(MessageResponse(
-            id=msg.id,
-            from_user_id=msg.from_user_id,
-            to_user_id=msg.to_user_id,
-            to_team_id=msg.to_team_id,
-            to_all=msg.to_all,
-            content=msg.content,
-            priority=msg.priority,
-            is_read=msg.is_read,
-            read_at=msg.read_at,
-            created_at=msg.created_at,
-            from_user_name=sender.full_name if sender else "Unknown",
-        ))
-    
-    return MessageListResponse(
-        total=total,
-        items=items,
-        page=page,
-        size=size,
-        unread_count=unread_count,
+    result = await db.execute(
+        select(Message)
+        .where(Message.channel_type == MessageChannel.global_chat, Message.is_deleted == False)
+        .order_by(Message.created_at.desc())
+        .limit(limit)
     )
+    return result.scalars().all()
 
-@router.post("/", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
+
+@router.get("/team/{team_id}")
+async def get_team_messages(
+    team_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.channel_type == MessageChannel.team,
+            Message.channel_id == str(team_id),
+            Message.is_deleted == False,
+        )
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+@router.get("/dm/{other_user_id}")
+async def get_dm_messages(
+    other_user_id: uuid.UUID,
+    limit: int = Query(50, ge=1, le=200),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    channel_key = "_".join(sorted([str(current_user.id), str(other_user_id)]))
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.channel_type == MessageChannel.dm,
+            Message.channel_id == channel_key,
+            Message.is_deleted == False,
+        )
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    return result.scalars().all()
+
+
+@router.post("", status_code=201)
 async def send_message(
-    data: MessageSend,
-    current_user: User = Depends(require_any_user),
-    db: AsyncSession = Depends(get_db)
+    data: MessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Send a message"""
-    # Validate recipients
-    if not data.to_all and not data.to_user_id and not data.to_team_id:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Must specify recipient (user, team, or all)"
-        )
-    
+    channel_id = data.channel_id
+    if data.channel_type == MessageChannel.global_chat:
+        channel_id = "global"
+    elif data.channel_type == MessageChannel.emergency:
+        channel_id = "emergency"
+
     message = Message(
-        from_user_id=current_user.id,
-        to_user_id=data.to_user_id,
-        to_team_id=data.to_team_id,
-        to_all=data.to_all,
+        channel_type=data.channel_type,
+        channel_id=channel_id,
+        sender_id=current_user.id,
         content=data.content,
-        priority=data.priority,
+        message_type=data.message_type,
+        reply_to_id=data.reply_to_id,
     )
-    
     db.add(message)
     await db.commit()
     await db.refresh(message)
 
-    # Broadcast message via WebSocket so connected clients update in real time
-    try:
-        broadcast_payload = {
-            "type": "new_message",
-            "data": {
-                "id": str(message.id),
-                "from_user_id": str(message.from_user_id),
-                "from_user_name": current_user.full_name,
-                "to_user_id": str(message.to_user_id) if message.to_user_id else None,
-                "to_team_id": str(message.to_team_id) if message.to_team_id else None,
-                "to_all": message.to_all,
-                "content": message.content,
-                "priority": message.priority,
-                "created_at": message.created_at.isoformat(),
-            },
-        }
-        # Always broadcast to all — commanders/operators need to see every message.
-        # For personal DMs the client filters by fromId/toId; for team messages commanders
-        # must still receive them since they're not in team_subscriptions on the message WS.
-        asyncio.create_task(manager.broadcast_to_all(broadcast_payload))
-    except Exception:
-        pass
+    await manager.broadcast({
+        "type": "new_message",
+        "channel": channel_id,
+        "message_id": str(message.id),
+        "sender_id": str(current_user.id),
+        "sender_name": current_user.full_name,
+        "content": message.content,
+        "timestamp": message.created_at.isoformat(),
+    })
+    return {"id": str(message.id), "created_at": message.created_at.isoformat()}
 
-    return MessageResponse(
-        id=message.id,
-        from_user_id=message.from_user_id,
-        to_user_id=message.to_user_id,
-        to_team_id=message.to_team_id,
-        to_all=message.to_all,
-        content=message.content,
-        priority=message.priority,
-        is_read=message.is_read,
-        read_at=message.read_at,
-        created_at=message.created_at,
-        from_user_name=current_user.full_name,
-    )
-
-@router.post("/broadcast", response_model=MessageResponse, status_code=status.HTTP_201_CREATED)
-async def broadcast_message(
-    data: MessageSend,
-    current_user: User = Depends(require_any_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Broadcast message to all users or team"""
-    message = Message(
-        from_user_id=current_user.id,
-        to_all=data.to_all,
-        to_team_id=data.to_team_id,
-        content=data.content,
-        priority=data.priority,
-    )
-    
-    db.add(message)
-    await db.commit()
-    await db.refresh(message)
-    
-    return MessageResponse(
-        id=message.id,
-        from_user_id=message.from_user_id,
-        to_user_id=message.to_user_id,
-        to_team_id=message.to_team_id,
-        to_all=message.to_all,
-        content=message.content,
-        priority=message.priority,
-        is_read=message.is_read,
-        read_at=message.read_at,
-        created_at=message.created_at,
-        from_user_name=current_user.full_name,
-    )
 
 @router.put("/{message_id}/read")
-async def mark_as_read(
-    message_id: UUID,
+async def mark_read(
+    message_id: uuid.UUID,
     current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ):
-    """Mark message as read"""
-    result = await db.execute(
-        select(Message).where(
-            Message.id == message_id,
-            or_(
-                Message.to_user_id == current_user.id,
-                Message.to_all == True,
-            ),
-        )
+    existing = await db.execute(
+        select(MessageRead).where(MessageRead.message_id == message_id, MessageRead.user_id == current_user.id)
     )
-    message = result.scalar_one_or_none()
-    
-    if not message:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Message not found"
-        )
-    
-    message.is_read = True
-    message.read_at = datetime.now(timezone.utc)
-    await db.commit()
-    
-    return {"message": "Marked as read"}
-
-@router.put("/read-all")
-async def mark_all_as_read(
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db)
-):
-    """Mark all messages as read"""
-    result = await db.execute(
-        select(Message).where(
-            or_(
-                Message.to_user_id == current_user.id,
-                Message.to_all == True,
-            ),
-            Message.is_read == False,
-        )
-    )
-    messages = result.scalars().all()
-    
-    for message in messages:
-        message.is_read = True
-        message.read_at = datetime.now(timezone.utc)
-    
-    await db.commit()
-    
-    return {"message": f"{len(messages)} messages marked as read"}
+    if not existing.scalar_one_or_none():
+        read = MessageRead(message_id=message_id, user_id=current_user.id)
+        db.add(read)
+        await db.commit()
+    return {"status": "read"}

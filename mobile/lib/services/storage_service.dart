@@ -1,46 +1,38 @@
 import 'package:shared_preferences/shared_preferences.dart';
-import 'dart:convert';
-import '../config/constants.dart';
 
 class StorageService {
-  static late SharedPreferences _prefs;
+  static final StorageService _instance = StorageService._internal();
+  factory StorageService() => _instance;
+  StorageService._internal();
+
+  late SharedPreferences _prefs;
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
   }
 
-  // Token Management
-  Future<void> saveToken(String token) async {
-    await _prefs.setString(AppConstants.tokenKey, token);
+  String? getString(String key) => _prefs.getString(key);
+  Future<bool> setString(String key, String value) => _prefs.setString(key, value);
+  Future<bool> remove(String key) => _prefs.remove(key);
+  Future<bool> clear() => _prefs.clear();
+
+  String? get accessToken => getString('access_token');
+  String? get refreshToken => getString('refresh_token');
+  String? get userJson => getString('user_json');
+
+  Future<void> saveAuth({
+    required String accessToken,
+    required String refreshToken,
+    required String userJson,
+  }) async {
+    await setString('access_token', accessToken);
+    await setString('refresh_token', refreshToken);
+    await setString('user_json', userJson);
   }
 
-  Future<String?> getToken() async {
-    return _prefs.getString(AppConstants.tokenKey);
-  }
-
-  Future<void> saveRefreshToken(String token) async {
-    await _prefs.setString(AppConstants.refreshTokenKey, token);
-  }
-
-  Future<String?> getRefreshToken() async {
-    return _prefs.getString(AppConstants.refreshTokenKey);
-  }
-
-  // User Data
-  Future<void> saveUserData(Map<String, dynamic> user) async {
-    await _prefs.setString(AppConstants.userKey, jsonEncode(user));
-  }
-
-  Future<Map<String, dynamic>?> getUserData() async {
-    final data = _prefs.getString(AppConstants.userKey);
-    if (data != null) {
-      return jsonDecode(data);
-    }
-    return null;
-  }
-
-  // Clear All
-  Future<void> clearAll() async {
-    await _prefs.clear();
+  Future<void> clearAuth() async {
+    await remove('access_token');
+    await remove('refresh_token');
+    await remove('user_json');
   }
 }

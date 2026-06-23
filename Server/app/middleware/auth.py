@@ -1,84 +1,84 @@
-# app/middleware/auth.py
+import uuid
+from datetime import datetime
+from typing import Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from typing import Optional
-from uuid import UUID
 
+from app.config import settings
 from app.database import get_db
 from app.models.user import User, UserRole
-from app.utils.security import verify_access_token
 
 security = HTTPBearer()
+security_optional = HTTPBearer(auto_error=False)
+
+
+def _decode_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token type")
+        return payload
+    except JWTError:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+
 
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_db),
 ) -> User:
-    """Get current authenticated user"""
-    token = credentials.credentials
-    payload = verify_access_token(token)
-    
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    
+    payload = _decode_token(credentials.credentials)
     user_id = payload.get("sub")
     if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token payload",
-        )
-    
-    result = await db.execute(
-        select(User).where(User.id == UUID(user_id))
-    )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
+
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id), User.is_active == True))
     user = result.scalar_one_or_none()
-    
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="User not found",
-        )
-    
-    if not user.is_active:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="User account is disabled",
-        )
-    
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
+
+    user.last_seen = datetime.utcnow()
+    await db.commit()
     return user
 
-class RoleChecker:
-    """Dependency for checking user roles"""
-    
-    def __init__(self, allowed_roles: list[UserRole]):
-        self.allowed_roles = allowed_roles
-    
-    async def __call__(
-        self,
-        user: User = Depends(get_current_user)
-    ) -> User:
-        if user.role not in self.allowed_roles:
+
+async def get_current_user_optional(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security_optional),
+    db: AsyncSession = Depends(get_db),
+) -> Optional[User]:
+    if not credentials:
+        return None
+    try:
+        return await get_current_user(credentials, db)
+    except HTTPException:
+        return None
+
+
+def require_role(*roles: UserRole):
+    async def _check(user: User = Depends(get_current_user)) -> User:
+        if user.role not in roles:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Required role: {[r.value for r in self.allowed_roles]}",
+                detail=f"Access denied. Required role: {[r.value for r in roles]}",
             )
         return user
+    return _check
 
-# Pre-defined role checkers
-require_admin = RoleChecker([UserRole.SUPER_ADMIN, UserRole.ADMIN])
-require_commander = RoleChecker([
-    UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.COMMANDER
-])
-require_operator = RoleChecker([
-    UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.COMMANDER, UserRole.OPERATOR
-])
-require_any_user = RoleChecker([
-    UserRole.SUPER_ADMIN, UserRole.ADMIN, UserRole.COMMANDER,
-    UserRole.OPERATOR, UserRole.VIEWER, UserRole.FIELD_UNIT
-])
+
+def require_coordinator():
+    return require_role(UserRole.operations_coordinator)
+
+
+def require_planning_or_above():
+    return require_role(UserRole.operations_coordinator, UserRole.planning_officer)
+
+
+def require_leader_or_above():
+    return require_role(UserRole.operations_coordinator, UserRole.planning_officer, UserRole.team_leader)
+
+
+require_coordinator = require_role(UserRole.operations_coordinator)
+require_planning_or_above = require_role(UserRole.operations_coordinator, UserRole.planning_officer)
+require_leader_or_above = require_role(UserRole.operations_coordinator, UserRole.planning_officer, UserRole.team_leader)

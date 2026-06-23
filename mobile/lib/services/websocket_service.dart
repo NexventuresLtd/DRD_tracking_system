@@ -1,57 +1,88 @@
-import 'package:flutter/foundation.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
-import '../config/constants.dart';
+import 'storage_service.dart';
+import '../config/environment.dart';
+
+typedef WsHandler = void Function(Map<String, dynamic> msg);
 
 class WebSocketService {
+  static final WebSocketService _instance = WebSocketService._internal();
+  factory WebSocketService() => _instance;
+  WebSocketService._internal();
+
   WebSocketChannel? _channel;
-  final _messageController = StreamController<Map<String, dynamic>>.broadcast();
-  bool _isConnected = false;
+  StreamSubscription? _sub;
+  final Map<String, List<WsHandler>> _handlers = {};
+  bool _connected = false;
+  String? _currentPath;
+  Timer? _reconnectTimer;
 
-  Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
-  bool get isConnected => _isConnected;
+  bool get connected => _connected;
 
-  void connect(String token) {
+  void on(String type, WsHandler handler) {
+    _handlers.putIfAbsent(type, () => []).add(handler);
+  }
+
+  void off(String type, WsHandler handler) {
+    _handlers[type]?.remove(handler);
+  }
+
+  Future<void> connect(String path) async {
+    if (_connected && _currentPath == path) return;
+    await disconnect();
+    final token = WebSocketService._storage.accessToken;
+    if (token == null) return;
+
+    _currentPath = path;
+    final wsBase = EnvironmentConfig.wsBaseUrl;
+    final uri = Uri.parse('$wsBase$path?token=${Uri.encodeComponent(token)}');
+
     try {
-      final wsUrl = '${AppConstants.wsUrl}/messages?token=$token';
-      _channel = WebSocketChannel.connect(Uri.parse(wsUrl));
-      _isConnected = true;
-
-      _channel!.stream.listen(
+      _channel = WebSocketChannel.connect(uri);
+      _connected = true;
+      _sub = _channel!.stream.listen(
         (data) {
-          final message = jsonDecode(data);
-          _messageController.add(message);
+          final msg = jsonDecode(data as String) as Map<String, dynamic>;
+          final type = msg['type'] as String?;
+          if (type != null) {
+            for (final handler in List<WsHandler>.from(_handlers[type] ?? [])) {
+              handler(msg);
+            }
+          }
         },
         onDone: () {
-          _isConnected = false;
-          // Auto-reconnect
-          Future.delayed(const Duration(seconds: 5), () => connect(token));
+          _connected = false;
+          _scheduleReconnect();
         },
-        onError: (error) {
-          _isConnected = false;
-          debugPrint('WebSocket Error: $error');
+        onError: (_) {
+          _connected = false;
+          _scheduleReconnect();
         },
       );
-    } catch (e) {
-      debugPrint('WebSocket Connection Error: $e');
-      _isConnected = false;
+    } catch (_) {
+      _connected = false;
     }
   }
 
-  void sendMessage(Map<String, dynamic> data) {
-    if (_channel != null && _isConnected) {
-      _channel!.sink.add(jsonEncode(data));
-    }
+  void send(Map<String, dynamic> msg) {
+    if (_connected) _channel?.sink.add(jsonEncode(msg));
   }
 
-  void disconnect() {
-    _channel?.sink.close();
-    _isConnected = false;
+  Future<void> disconnect() async {
+    _reconnectTimer?.cancel();
+    _sub?.cancel();
+    await _channel?.sink.close();
+    _connected = false;
+    _currentPath = null;
   }
 
-  void dispose() {
-    disconnect();
-    _messageController.close();
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel();
+    _reconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (_currentPath != null) connect(_currentPath!);
+    });
   }
+
+  static final _storage = StorageService();
 }

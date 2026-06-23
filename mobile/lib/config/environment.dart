@@ -1,58 +1,22 @@
-import 'package:flutter/foundation.dart';
-
-/// Environment configuration for different build variants
-enum BuildFlavor { development, staging, production }
-
 class EnvironmentConfig {
-  static late BuildFlavor buildFlavor;
-  static late String apiBaseUrl;
-  static late String wsUrl;
+  static late String _apiBaseUrl;
+  static late String _wsBaseUrl;
+  static late String _env;
 
-  /// Initialize environment based on flavor
-  static void init([BuildFlavor? flavor]) {
-    // Determine flavor: use provided flavor, or read from dart-define, or default to development
-    flavor ??= _getFlavourFromEnv();
-
-    buildFlavor = flavor;
-
-    // All flavors always use the production server
-    apiBaseUrl = 'http://192.168.1.73:8000/api/v1';
-    wsUrl = 'ws://192.168.1.73:8000/ws';
-
-    debugPrint('🔧 Environment initialized: ${flavor.name.toUpperCase()}');
-    debugPrint('📡 API URL: $apiBaseUrl');
-  }
-
-  /// Get flavor from dart-define environment variable
-  static BuildFlavor _getFlavourFromEnv() {
-    const String flavor = String.fromEnvironment(
-      'FLAVOR',
-      defaultValue: 'production',
+  static void init() {
+    _env = const String.fromEnvironment('ENV', defaultValue: 'development');
+    _apiBaseUrl = const String.fromEnvironment(
+      'API_BASE_URL',
+      defaultValue: 'http://localhost:1104',
     );
-
-    switch (flavor.toLowerCase()) {
-      case 'staging':
-        return BuildFlavor.staging;
-      case 'production':
-        return BuildFlavor.production;
-      case 'development':
-      default:
-        return BuildFlavor.development;
-    }
+    _wsBaseUrl = const String.fromEnvironment(
+      'WS_BASE_URL',
+      defaultValue: 'ws://localhost:1104',
+    );
   }
 
-  /// Get current API base URL
-  static String getApiBaseUrl() => apiBaseUrl;
-
-  /// Get current WebSocket URL
-  static String getWsUrl() => wsUrl;
-
-  /// Check if running in debug mode
-  static bool isDebug() => buildFlavor == BuildFlavor.development;
-
-  /// Check if production
-  static bool isProduction() => buildFlavor == BuildFlavor.production;
-
-  /// Get current flavor name
-  static String getFlavourName() => buildFlavor.name;
+  static String get apiBaseUrl => _apiBaseUrl;
+  static String get wsBaseUrl => _wsBaseUrl;
+  static String get env => _env;
+  static bool get isDevelopment => _env == 'development';
 }

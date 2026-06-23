@@ -1,172 +1,175 @@
-import axios from 'axios';
+import axios from "axios";
+import type { AxiosInstance } from "axios";
 
-const BASE_URL = import.meta.env.VITE_API_URL || 'https://drd.nexventures.net/';
-console.log(`API Base URL: ${BASE_URL}`);
-const api = axios.create({
-  baseURL: BASE_URL,
-  headers: { 'Content-Type': 'application/json' },
-  timeout: 10000,
+const BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:1104";
+
+export const mediaUrl = (path: string | null | undefined): string | undefined => {
+  if (!path) return undefined;
+  if (path.startsWith("http")) return path;
+  return `${BASE_URL}${path}`;
+};
+
+const api: AxiosInstance = axios.create({
+  baseURL: `${BASE_URL}/api/v1`,
+  headers: { "Content-Type": "application/json" },
 });
 
-api.interceptors.request.use(config => {
-  const token = localStorage.getItem('access_token');
+api.interceptors.request.use((config) => {
+  const token = localStorage.getItem("access_token");
   if (token) config.headers.Authorization = `Bearer ${token}`;
   return config;
 });
 
 api.interceptors.response.use(
-  res => res,
-  async err => {
-    const original = err.config;
-    if (err.response?.status === 401 && !original._retry) {
-      original._retry = true;
-      const refresh = localStorage.getItem('refresh_token');
+  (res) => res,
+  async (error) => {
+    if (error.response?.status === 401) {
+      const refresh = localStorage.getItem("refresh_token");
       if (refresh) {
         try {
           const { data } = await axios.post(`${BASE_URL}/api/v1/auth/refresh`, { refresh_token: refresh });
-          localStorage.setItem('access_token', data.access_token);
-          if (data.refresh_token) localStorage.setItem('refresh_token', data.refresh_token);
-          original.headers.Authorization = `Bearer ${data.access_token}`;
-          return api.request(original);
+          localStorage.setItem("access_token", data.access_token);
+          localStorage.setItem("refresh_token", data.refresh_token);
+          error.config.headers.Authorization = `Bearer ${data.access_token}`;
+          return api(error.config);
         } catch {
-          localStorage.removeItem('access_token');
-          localStorage.removeItem('refresh_token');
+          localStorage.clear();
+          window.location.href = "/login";
         }
+      } else {
+        localStorage.clear();
+        window.location.href = "/login";
       }
     }
-    return Promise.reject(err);
+    return Promise.reject(error);
   }
 );
 
-// ── Auth ──────────────────────────────────────────────────────────────────────
-// Backend accepts username OR email in the `username` field
-export const login = (identifier: string, password: string) =>
-  api.post('/api/v1/auth/login', { username: identifier, password });
-
-export const verifyOtp = (sessionId: string, otp: string) =>
-  api.post('/api/v1/auth/verify-otp', { session_id: sessionId, otp });
-
-export const register = (data: object) => api.post('/api/v1/auth/register', data);
-export const getMe = () => api.get('/api/v1/auth/me');
-export const logout = () => api.post('/api/v1/auth/logout');
-export const changePassword = (data: object) => api.put('/api/v1/auth/change-password', data);
-
-// ── Users ─────────────────────────────────────────────────────────────────────
-export const listUsers = (params?: object) => api.get('/api/v1/users', { params });
-export const createUser = (data: object) => api.post('/api/v1/users', data);
-export const getUser = (id: string) => api.get(`/api/v1/users/${id}`);
-export const updateUser = (id: string, data: object) => api.put(`/api/v1/users/${id}`, data);
-export const deleteUser = (id: string) => api.delete(`/api/v1/users/${id}`);
-
-// ── Teams ─────────────────────────────────────────────────────────────────────
-export const listTeams = (params?: object) => api.get('/api/v1/teams', { params });
-export const createTeam = (data: object) => api.post('/api/v1/teams', data);
-export const getTeam = (id: string) => api.get(`/api/v1/teams/${id}`);
-export const updateTeam = (id: string, data: object) => api.put(`/api/v1/teams/${id}`, data);
-export const addTeamMember = (teamId: string, data: object) =>
-  api.post(`/api/v1/teams/${teamId}/members`, data);
-export const removeTeamMember = (teamId: string, userId: string) =>
-  api.delete(`/api/v1/teams/${teamId}/members/${userId}`);
-export const setTeamLead = (teamId: string, userId: string) =>
-  api.put(`/api/v1/teams/${teamId}/set-lead/${userId}`);
-
-// ── Locations ─────────────────────────────────────────────────────────────────
-export const getActiveLocations = (params?: { team_id?: string; start_time?: string; end_time?: string }) =>
-  api.get('/api/v1/locations', { params });
-export const getUserLocation = (userId: string) => api.get(`/api/v1/locations/${userId}`);
-export const getUserLocationHistory = (userId: string, params?: object) =>
-  api.get(`/api/v1/locations/${userId}/history`, { params });
-export const updateLocation = (data: object) => api.post('/api/v1/locations', data);
-export const getLocationsInBounds = (data: object) => api.post('/api/v1/locations/geofence', data);
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-export const listRoutes = (params?: object) => api.get('/api/v1/routes', { params });
-export const listRouteHistory = (params?: object) => api.get('/api/v1/routes/history', { params });
-export const createRoute = (data: object) => api.post('/api/v1/routes', data);
-export const getRoute = (id: string) => api.get(`/api/v1/routes/${id}`);
-export const updateRoute = (id: string, data: object) => api.put(`/api/v1/routes/${id}`, data);
-export const deleteRoute = (id: string) => api.delete(`/api/v1/routes/${id}`);
-export const approveRoute = (id: string) => api.post(`/api/v1/routes/${id}/approve`, {});
-export const rejectRoute = (id: string) => api.post(`/api/v1/routes/${id}/reject`, {});
-export const addWaypoint = (routeId: string, data: object) =>
-  api.post(`/api/v1/routes/${routeId}/waypoints`, data);
-export const listRouteFollowSessions = (params?: object) => api.get('/api/v1/route-follow-sessions', { params });
-export const getMyRouteFollowSession = () => api.get('/api/v1/route-follow-sessions/me');
-export const completeRouteFollowSession = (sessionId: string, data?: object) =>
-  api.post(`/api/v1/route-follow-sessions/${sessionId}/complete`, data ?? {});
-
-// ── POIs ──────────────────────────────────────────────────────────────────────
-export const listPOIs = (params?: object) => api.get('/api/v1/pois', { params });
-export const createPOI = (data: object) => api.post('/api/v1/pois', data);
-export const getPOI = (id: string) => api.get(`/api/v1/pois/${id}`);
-export const updatePOI = (id: string, data: object) => api.put(`/api/v1/pois/${id}`, data);
-export const deletePOI = (id: string) => api.delete(`/api/v1/pois/${id}`);
-export const updatePOIVisibility = (id: string, data: object) =>
-  api.put(`/api/v1/pois/${id}/visibility`, data);
-
-export const post = <T = unknown>(url: string, data?: unknown) => api.post<T>(url, data);
-
-// ── Messages ──────────────────────────────────────────────────────────────────
-export const listMessages = (params?: object) => api.get('/api/v1/messages', { params });
-export const sendMessage = (data: object) => api.post('/api/v1/messages', data);
-export const broadcastMessage = (data: object) => api.post('/api/v1/messages/broadcast', data);
-export const markMessageRead = (id: string) => api.put(`/api/v1/messages/${id}/read`);
-export const markAllRead = () => api.put('/api/v1/messages/read-all');
-
-// ── Events ────────────────────────────────────────────────────────────────────
-export const listEvents = (params?: object) => api.get('/api/v1/events', { params });
-export const createEvent = (data: object) => api.post('/api/v1/events', data);
-export const getEventStats = (days?: number) =>
-  api.get('/api/v1/events/stats', { params: days ? { days } : undefined });
-
-// ── Zones ─────────────────────────────────────────────────────────────────────
-export const listZones = (params?: object) => api.get('/api/v1/zones', { params });
-export const createZone = (data: object) => api.post('/api/v1/zones', data);
-export const updateZone = (id: string, data: object) => api.put(`/api/v1/zones/${id}`, data);
-export const deleteZone = (id: string) => api.delete(`/api/v1/zones/${id}`);
-export const assignZone = (zoneId: string, data: object) =>
-  api.post(`/api/v1/zones/${zoneId}/assign`, data);
-
-// ── Live Sessions ─────────────────────────────────────────────────────────────
-export const startLiveSession = (data: object) => api.post('/api/v1/live-sessions/start', data);
-export const endLiveSession = (id: string) => api.patch(`/api/v1/live-sessions/${id}/end`, {});
-export const listLiveSessions = (savedOnly?: boolean) => api.get('/api/v1/live-sessions', { params: savedOnly ? { saved_only: true } : undefined });
-export const uploadSessionVideo = (id: string, blob: Blob) => {
-  const form = new FormData();
-  form.append('video', blob, `live_${id}.webm`);
-  return api.post(`/api/v1/live-sessions/${id}/upload-video`, form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 120000,
-  });
-};
-export const getLiveSessionVideoUrl = (id: string) =>
-  `${new URL((import.meta.env.VITE_API_URL as string) || 'https://drd.nexventures.net/', window.location.origin).origin}/api/v1/live-sessions/${id}/video`;
-
-// ── Evidence ──────────────────────────────────────────────────────────────────
-// ── Invites ───────────────────────────────────────────────────────────────────
-export const createInvite = (data: { team_id?: string; role?: string; team_member_role?: string; expiry?: string; label?: string }) =>
-  api.post('/api/v1/invites/', data);
-export const listInvites = () => api.get('/api/v1/invites/');
-export const revokeInvite = (token: string) => api.delete(`/api/v1/invites/${token}`);
-export const validateInvite = (token: string) => api.get(`/api/v1/invites/${token}`);
-
-// ── Evidence ──────────────────────────────────────────────────────────────────
-export const uploadEvidence = (file: File, caption?: string, poiId?: string) => {
-  const form = new FormData();
-  form.append('files', file, file.name);
-  if (caption) form.append('caption', caption);
-  if (poiId) form.append('poi_id', poiId);
-  return api.post('/api/v1/evidence/upload', form, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
-  });
-};
-export const getPOIEvidence = (poiId: string) => api.get(`/api/v1/evidence/poi/${poiId}`);
-export const getMessageEvidence = (messageId: string) => api.get(`/api/v1/evidence/message/${messageId}`);
-export const getAllEvidence = () => api.get(`/api/v1/evidence/all`);
-export const deleteEvidence = (id: string) => api.delete(`/api/v1/evidence/${id}`);
-
-// ── Admin ─────────────────────────────────────────────────────────────────────
-export const resetAllData = () => api.post('/api/v1/admin/reset-data');
-
 export default api;
+
+export const authApi = {
+  login: (email: string, password: string) => api.post("/auth/login", { email, password }),
+  register: (data: object) => api.post("/auth/register", data),
+  me: () => api.get("/auth/me"),
+  logout: (refresh_token: string) => api.post("/auth/logout", { refresh_token }),
+  forgotPassword: (email: string) => api.post("/auth/forgot-password", { email }),
+  resetPassword: (token: string, new_password: string) => api.post("/auth/reset-password", { token, new_password }),
+};
+
+export const userApi = {
+  list: (params?: object) => api.get("/users", { params }),
+  getById: (id: string) => api.get(`/users/${id}`),
+  update: (id: string, data: object) => api.put(`/users/${id}`, data),
+  updateRole: (id: string, role: string) => api.put(`/users/${id}/role`, { role }),
+  uploadAvatar: (id: string, file: File) => {
+    const fd = new FormData();
+    fd.append("file", file);
+    return api.post(`/users/${id}/avatar`, fd, { headers: { "Content-Type": "multipart/form-data" } });
+  },
+  delete: (id: string) => api.delete(`/users/${id}`),
+};
+
+export const teamApi = {
+  list: () => api.get("/teams"),
+  create: (data: object) => api.post("/teams", data),
+  getById: (id: string) => api.get(`/teams/${id}`),
+  update: (id: string, data: object) => api.put(`/teams/${id}`, data),
+  delete: (id: string) => api.delete(`/teams/${id}`),
+  getMembers: (id: string) => api.get(`/teams/${id}/members`),
+  addMember: (id: string, data: object) => api.post(`/teams/${id}/members`, data),
+  removeMember: (teamId: string, userId: string) => api.delete(`/teams/${teamId}/members/${userId}`),
+  getLocations: (id: string) => api.get(`/teams/${id}/locations`),
+};
+
+export const adminApi = {
+  getUsers: (params?: object) => api.get("/admin/users", { params }),
+  createUser: (data: object) => api.post("/admin/users", data),
+  updateUser: (id: string, data: object) => api.patch(`/admin/users/${id}`, data),
+  deleteUser: (id: string) => api.delete(`/admin/users/${id}`),
+  resetPassword: (id: string, new_password: string) => api.post(`/admin/users/${id}/reset-password`, { new_password }),
+  getStats: () => api.get("/admin/stats"),
+  createInvite: (data: object) => api.post("/admin/invites", data),
+  listInvites: () => api.get("/admin/invites"),
+  revokeInvite: (id: string) => api.delete(`/admin/invites/${id}`),
+  getInviteQR: (id: string) => api.get(`/admin/invites/${id}/qr`),
+  getAuditLogs: (params?: object) => api.get("/admin/audit-logs", { params }),
+};
+
+export const missionApi = {
+  list: (params?: object) => api.get("/missions", { params }),
+  getById: (id: string) => api.get(`/missions/${id}`),
+  create: (data: object) => api.post("/missions", data),
+  update: (id: string, data: object) => api.put(`/missions/${id}`, data),
+  delete: (id: string) => api.delete(`/missions/${id}`),
+  assign: (id: string, data: object) => api.post(`/missions/${id}/assignments`, data),
+  completeObjective: (missionId: string, objId: string) =>
+    api.post(`/missions/${missionId}/objectives/${objId}/complete`),
+};
+
+export const locationApi = {
+  getLive: () => api.get("/locations/live"),
+  getUser: (uid: string) => api.get(`/locations/${uid}`),
+  getHistory: (uid: string, params?: object) => api.get(`/locations/${uid}/history`, { params }),
+  updateLocation: (data: object) => api.post("/locations", data),
+};
+
+export const contactApi = {
+  list: (params?: object) => api.get("/contacts", { params }),
+  getById: (id: string) => api.get(`/contacts/${id}`),
+  create: (data: object) => api.post("/contacts", data),
+  update: (id: string, data: object) => api.put(`/contacts/${id}`, data),
+  delete: (id: string) => api.delete(`/contacts/${id}`),
+};
+
+export const drawingApi = {
+  list: (params?: object) => api.get("/drawings", { params }),
+  create: (data: object) => api.post("/drawings", data),
+  delete: (id: string) => api.delete(`/drawings/${id}`),
+};
+
+export const notificationApi = {
+  list: (params?: object) => api.get("/notifications", { params }),
+  unreadCount: () => api.get("/notifications/unread-count"),
+  markRead: (id: string) => api.put(`/notifications/${id}/read`),
+  markAllRead: () => api.put("/notifications/read-all"),
+};
+
+export const messageApi = {
+  getGlobal: () => api.get("/messages/channels/global"),
+  getTeam: (teamId: string) => api.get(`/messages/channels/team/${teamId}`),
+  getDM: (uid: string) => api.get(`/messages/channels/dm/${uid}`),
+  send: (data: object) => api.post("/messages", data),
+  markRead: (id: string) => api.put(`/messages/${id}/read`),
+};
+
+export const sosApi = {
+  list: () => api.get("/sos"),
+  trigger: (data: object) => api.post("/sos", data),
+  acknowledge: (id: string) => api.put(`/sos/${id}/acknowledge`),
+  resolve: (id: string) => api.put(`/sos/${id}/resolve`),
+};
+
+export const geofenceApi = {
+  list: () => api.get("/geofences"),
+  create: (data: object) => api.post("/geofences", data),
+  delete: (id: string) => api.delete(`/geofences/${id}`),
+};
+
+export const routeApi = {
+  list: () => api.get("/routes"),
+  getById: (id: string) => api.get(`/routes/${id}`),
+  create: (data: object) => api.post("/routes", data),
+  delete: (id: string) => api.delete(`/routes/${id}`),
+};
+
+export const evidenceApi = {
+  list: () => api.get("/evidence"),
+  upload: (formData: FormData) => api.post("/evidence", formData, { headers: { "Content-Type": "multipart/form-data" } }),
+  delete: (id: string) => api.delete(`/evidence/${id}`),
+};
+
+export const liveFeedApi = {
+  list: () => api.get("/live-sessions"),
+  create: (data: object) => api.post("/live-sessions", data),
+  end: (id: string) => api.put(`/live-sessions/${id}/end`),
+};
