@@ -2,10 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { locationApi } from "../services/api";
+import { locationApi, postsApi } from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 import type { LiveLocation } from "../types";
-import { MdMyLocation, MdLayers, MdRefresh, MdClose } from "react-icons/md";
+import { MdMyLocation, MdLayers, MdRefresh, MdClose, MdDomain } from "react-icons/md";
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -75,6 +75,47 @@ const STATUS_COLORS: Record<string, string> = {
   offline: "#6b7280",
 };
 
+// ── Facility type metadata ──────────────────────────────────────────────────
+const FACILITY_META: Record<string, { icon: string; color: string }> = {
+  forward_operating_base:  { icon: "⬡", color: "#ef4444" },
+  main_operating_base:     { icon: "★", color: "#dc2626" },
+  combat_outpost:          { icon: "⬟", color: "#f97316" },
+  checkpoint:              { icon: "⬢", color: "#eab308" },
+  logistics_depot:         { icon: "▣", color: "#84cc16" },
+  medical_center:          { icon: "✚", color: "#22c55e" },
+  command_center:          { icon: "◈", color: "#14b8a6" },
+  communications_hub:      { icon: "◎", color: "#06b6d4" },
+  armory:                  { icon: "⚙", color: "#3b82f6" },
+  training_facility:       { icon: "◇", color: "#6366f1" },
+  detention_center:        { icon: "⊡", color: "#8b5cf6" },
+  airfield:                { icon: "✈", color: "#a855f7" },
+  naval_facility:          { icon: "⚓", color: "#ec4899" },
+  office:                  { icon: "▦", color: "#6b7280" },
+  border_post:             { icon: "⬛", color: "#78716c" },
+  safe_house:              { icon: "⌂", color: "#059669" },
+  intelligence_post:       { icon: "◉", color: "#7c3aed" },
+  barracks:                { icon: "⊞", color: "#374151" },
+  supply_point:            { icon: "◫", color: "#b45309" },
+  other:                   { icon: "◌", color: "#4b5563" },
+};
+
+function makeFacilityIcon(type: string) {
+  const meta = FACILITY_META[type] || FACILITY_META.other;
+  return L.divIcon({
+    className: "",
+    html: `<div style="
+      width:32px;height:32px;
+      background:${meta.color}22;
+      border:2px solid ${meta.color};
+      display:flex;align-items:center;justify-content:center;
+      font-size:14px;color:${meta.color};
+      box-shadow:0 0 8px ${meta.color}55;
+    ">${meta.icon}</div>`,
+    iconSize: [32, 32],
+    iconAnchor: [16, 16],
+  });
+}
+
 // ── Marker icon factory ─────────────────────────────────────────────────────
 function makeIcon(color: string, isMe: boolean) {
   const size = isMe ? 22 : 16;
@@ -138,6 +179,8 @@ export default function LiveMap() {
   const [loading, setLoading] = useState(true);
   const [activeTile, setActiveTile] = useState<TileId>("dark");
   const [showLayers, setShowLayers] = useState(false);
+  const [facilities, setFacilities] = useState<any[]>([]);
+  const [showFacilities, setShowFacilities] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
   const load = () => {
@@ -147,9 +190,17 @@ export default function LiveMap() {
       .finally(() => setLoading(false));
   };
 
+  const loadFacilities = () => {
+    postsApi.mapPosts()
+      .then(({ data }) => setFacilities(data))
+      .catch(() => {});
+  };
+
   useEffect(() => {
     load();
+    loadFacilities();
     const interval = setInterval(load, 10000);
+    const facilityInterval = setInterval(loadFacilities, 60000);
 
     const token = localStorage.getItem("access_token");
     if (token && user) {
@@ -170,7 +221,7 @@ export default function LiveMap() {
       };
     }
 
-    return () => { clearInterval(interval); wsRef.current?.close(); };
+    return () => { clearInterval(interval); clearInterval(facilityInterval); wsRef.current?.close(); };
   }, [user]);
 
   const statusCounts = Object.keys(STATUS_COLORS).map((s) => ({
@@ -201,6 +252,25 @@ export default function LiveMap() {
           title="Refresh"
         >
           <MdRefresh size={15} />
+        </button>
+      </div>
+
+      {/* ── Facilities toggle ── */}
+      <div style={{ position: "absolute", top: 12, right: 160, zIndex: 1000 }}>
+        <button
+          onClick={() => setShowFacilities((v) => !v)}
+          title="Toggle facility markers"
+          style={{
+            background: showFacilities ? "#052e16" : "#0a140a",
+            border: `1px solid ${showFacilities ? "#16a34a" : "#152015"}`,
+            color: showFacilities ? "#22c55e" : "#4b5563",
+            padding: "7px 10px", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 6,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: 1,
+          }}
+        >
+          <MdDomain size={16} />
+          {facilities.length} FACILITIES
         </button>
       </div>
 
@@ -286,6 +356,45 @@ export default function LiveMap() {
         <FitBoundsButton locations={locations} />
 
         <ZoomButtons />
+
+        {/* ── Facility markers ── */}
+        {showFacilities && facilities.map((f) => (
+          <Marker key={f.id} position={[f.latitude, f.longitude]} icon={makeFacilityIcon(f.facility_type)}>
+            <Popup className="drd-popup">
+              <div style={{
+                background: "#040804", border: "1px solid #152015",
+                padding: "10px 12px", minWidth: 200, fontFamily: "'JetBrains Mono', monospace",
+              }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ fontSize: 16, color: (FACILITY_META[f.facility_type] || FACILITY_META.other).color }}>
+                    {(FACILITY_META[f.facility_type] || FACILITY_META.other).icon}
+                  </span>
+                  <span style={{ color: "#d1fae5", fontSize: 12, fontWeight: 600 }}>{f.name}</span>
+                </div>
+                <p style={{ color: "#4b5563", fontSize: 10, margin: "2px 0" }}>
+                  {f.facility_type.replace(/_/g, " ").toUpperCase()}
+                </p>
+                {f.description && (
+                  <p style={{ color: "#374151", fontSize: 11, margin: "6px 0 0", lineHeight: 1.5 }}>{f.description}</p>
+                )}
+                {f.mission && (
+                  <p style={{ color: "#22c55e", fontSize: 10, margin: "4px 0 0", lineHeight: 1.5 }}>{f.mission}</p>
+                )}
+                <div style={{ marginTop: 6, color: "#1f4d1f", fontSize: 9, letterSpacing: 1 }}>
+                  {f.latitude.toFixed(5)}, {f.longitude.toFixed(5)}
+                </div>
+                <div style={{
+                  marginTop: 6, display: "inline-block",
+                  background: f.status === "active" ? "#22c55e20" : "#6b728020",
+                  color: f.status === "active" ? "#22c55e" : "#6b7280",
+                  fontSize: 8, padding: "2px 6px", letterSpacing: 1,
+                }}>
+                  {f.status.toUpperCase()}
+                </div>
+              </div>
+            </Popup>
+          </Marker>
+        ))}
 
         {locations.map((loc) => {
           const isMe = loc.user_id === user?.id;

@@ -49,6 +49,9 @@ export default api;
 
 export const authApi = {
   login: (email: string, password: string) => api.post("/auth/login", { email, password }),
+  verifyOtp: (otp_session: string, otp_code: string) =>
+    api.post("/auth/verify-otp", { otp_session, otp_code }),
+  resendOtp: (otp_session: string) => api.post("/auth/resend-otp", { otp_session }),
   register: (data: object) => api.post("/auth/register", data),
   me: () => api.get("/auth/me"),
   logout: (refresh_token: string) => api.post("/auth/logout", { refresh_token }),
@@ -172,4 +175,16 @@ export const liveFeedApi = {
   list: () => api.get("/live-sessions"),
   create: (data: object) => api.post("/live-sessions", data),
   end: (id: string) => api.put(`/live-sessions/${id}/end`),
+};
+
+export const postsApi = {
+  list: (params?: object) => api.get("/posts", { params }),
+  create: (data: object) => api.post("/posts", data),
+  getById: (id: string) => api.get(`/posts/${id}`),
+  update: (id: string, data: object) => api.put(`/posts/${id}`, data),
+  delete: (id: string) => api.delete(`/posts/${id}`),
+  togglePublish: (id: string) => api.post(`/posts/${id}/publish`),
+  grantAccess: (id: string, user_id: string) => api.post(`/posts/${id}/grant-access`, { user_id }),
+  revokeAccess: (id: string, userId: string) => api.delete(`/posts/${id}/grant-access/${userId}`),
+  mapPosts: () => api.get("/posts/map/published"),
 };

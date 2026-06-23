@@ -50,6 +50,53 @@ class AuthProvider extends ChangeNotifier {
     } catch (_) {}
   }
 
+  // Returns otp_session on success, null on failure
+  Future<Map<String, String>?> initiateLogin(String email, String password) async {
+    _error = null;
+    notifyListeners();
+    try {
+      final data = await _api.post('/auth/login', {'email': email, 'password': password});
+      return {
+        'otp_session': data['otp_session'] as String,
+        'email_hint': data['email_hint'] as String,
+      };
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return null;
+    }
+  }
+
+  Future<bool> verifyOtp(String otpSession, String otpCode) async {
+    _error = null;
+    notifyListeners();
+    try {
+      final data = await _api.post('/auth/verify-otp', {
+        'otp_session': otpSession,
+        'otp_code': otpCode,
+      });
+      _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      await _storage.saveAuth(
+        accessToken: data['access_token'] as String,
+        refreshToken: data['refresh_token'] as String,
+        userJson: jsonEncode(_user!.toJson()),
+      );
+      _status = AuthStatus.authenticated;
+      notifyListeners();
+      return true;
+    } on ApiException catch (e) {
+      _error = e.message;
+      notifyListeners();
+      return false;
+    }
+  }
+
+  Future<void> resendOtp(String otpSession) async {
+    try {
+      await _api.post('/auth/resend-otp', {'otp_session': otpSession});
+    } catch (_) {}
+  }
+
   Future<bool> login(String email, String password) async {
     _error = null;
     notifyListeners();

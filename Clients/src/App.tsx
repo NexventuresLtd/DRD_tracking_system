@@ -22,6 +22,7 @@ const LiveFeed = lazy(() => import("./Pages/LiveFeed"));
 const PlaybackPage = lazy(() => import("./Pages/Playback"));
 const AnalyticsPage = lazy(() => import("./Pages/Analytics"));
 const PackagesPage = lazy(() => import("./Pages/Packages"));
+const PostsPage = lazy(() => import("./Pages/Posts"));
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
   const { isAuthenticated, user } = useAuthStore();
@@ -150,6 +151,7 @@ export default function App() {
             <Route path="playback" element={<PlaybackPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
             <Route path="packages" element={<PackagesPage />} />
+            <Route path="posts" element={<PostsPage />} />
             <Route
               path="admin"
               element={

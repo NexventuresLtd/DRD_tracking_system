@@ -117,8 +117,8 @@ flutter:
           weight: 600
 
   assets:
-    - lib/assets/Roundel_of_Rwanda.svg
     - lib/assets/logo1.png
+    - lib/assets/images/
 
   # An image asset can refer to one or more resolution-specific "variants", see
   # https://flutter.dev/to/resolution-aware-images

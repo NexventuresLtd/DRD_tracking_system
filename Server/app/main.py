@@ -7,7 +7,7 @@ import asyncio
 
 from app.config import settings
 from app.database import init_db
-from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence, live_sessions, admin, missions, contacts, drawings, notifications, sos, geofences, packages, playback
+from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence, live_sessions, admin, missions, contacts, drawings, notifications, sos, geofences, packages, playback, posts
 from fastapi.staticfiles import StaticFiles
 from app.websocket import location_ws, event_ws, message_ws, video_ws, notification_ws
 from app.middleware.cors import setup_cors
@@ -111,6 +111,7 @@ app.include_router(sos.router, prefix="/api/v1")
 app.include_router(geofences.router, prefix="/api/v1")
 app.include_router(packages.router, prefix="/api/v1")
 app.include_router(playback.router, prefix="/api/v1")
+app.include_router(posts.router, prefix="/api/v1")
 
 # Serve uploaded files
 import os

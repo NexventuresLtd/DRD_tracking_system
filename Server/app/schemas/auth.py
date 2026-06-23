@@ -46,6 +46,19 @@ class RegisterDeviceRequest(BaseModel):
     device_name: Optional[str] = None
 
 
+class OTPSessionResponse(BaseModel):
+    requires_otp: bool = True
+    otp_session: str
+    email_hint: str
+
+
+class VerifyOTPRequest(BaseModel):
+    otp_session: str
+    otp_code: str
+    device_id: Optional[str] = None
+    device_name: Optional[str] = None
+
+
 class QREnrollRequest(BaseModel):
     qr_code: str
     email: EmailStr

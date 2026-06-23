@@ -20,6 +20,7 @@ from app.models.live_session import LiveSession
 from app.models.checkpoint import Checkpoint
 from app.models.resource import ResourceItem
 from app.models.package import MissionPackage, MissionPackageItem
+from app.models.post import Post, FacilityType, FacilityStatus, FacilityVisibility
 
 __all__ = [
     "Base",
@@ -44,4 +45,5 @@ __all__ = [
     "Checkpoint",
     "ResourceItem",
     "MissionPackage", "MissionPackageItem",
+    "Post", "FacilityType", "FacilityStatus", "FacilityVisibility",
 ]

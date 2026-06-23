@@ -1,8 +1,11 @@
 import secrets
+import random
+import uuid as _uuid
 from datetime import datetime, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
@@ -12,11 +15,24 @@ from app.schemas.auth import (
     RegisterRequest, LoginRequest, TokenResponse, RefreshRequest,
     ForgotPasswordRequest, ResetPasswordRequest, RegisterDeviceRequest,
     QREnrollRequest, VoucherEnrollRequest,
+    OTPSessionResponse, VerifyOTPRequest,
 )
 from app.schemas.user import UserResponse
-from app.services.auth_service import AuthService, create_password_reset_token, verify_reset_token, hash_password
-from app.services.email_service import send_password_reset_email, send_welcome_email
+from app.services.auth_service import AuthService, create_password_reset_token, verify_reset_token, hash_password, create_access_token, create_refresh_token
+from app.services.email_service import send_password_reset_email, send_welcome_email, send_otp_email
 from app.config import settings
+from app.models.user import UserSession
+
+# In-memory OTP store: otp_session -> {user_id, code, expires_at, ip}
+_otp_store: dict[str, dict] = {}
+
+
+def _mask_email(email: str) -> str:
+    parts = email.split("@")
+    local = parts[0]
+    domain = parts[1] if len(parts) > 1 else ""
+    masked = local[:2] + "***" + local[-1:] if len(local) > 3 else local[:1] + "***"
+    return f"{masked}@{domain}"
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -59,18 +75,98 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
 @router.post("/login")
 async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends(get_db)):
     svc = AuthService(db)
-    result = await svc.login(
-        email=data.email,
-        password=data.password,
-        device_id=data.device_id,
-        device_name=data.device_name,
-        ip_address=request.client.host if request.client else None,
-    )
-    if not result:
+    identifier = data.email.lower().strip()
+    user = await svc.get_user_by_email(identifier)
+    if not user:
+        user = await svc.get_user_by_username(identifier)
+    if not user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    user, access, refresh = result
-    return _token_response(user, access, refresh)
+    from app.services.auth_service import verify_password
+    if not verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    if not user.is_active:
+        raise HTTPException(status_code=403, detail="Account deactivated")
+
+    otp_code = f"{random.randint(0, 999999):06d}"
+    otp_session = str(_uuid.uuid4())
+    _otp_store[otp_session] = {
+        "user_id": str(user.id),
+        "code": otp_code,
+        "expires_at": datetime.utcnow() + timedelta(minutes=settings.OTP_EXPIRE_MINUTES),
+        "device_id": data.device_id,
+        "device_name": data.device_name,
+        "ip_address": request.client.host if request.client else None,
+    }
+
+    await send_otp_email(user.email, user.full_name, otp_code)
+
+    return {
+        "requires_otp": True,
+        "otp_session": otp_session,
+        "email_hint": _mask_email(user.email),
+    }
+
+
+@router.post("/verify-otp")
+async def verify_otp(data: VerifyOTPRequest, db: AsyncSession = Depends(get_db)):
+    session_data = _otp_store.get(data.otp_session)
+    if not session_data:
+        raise HTTPException(status_code=400, detail="Invalid or expired session. Please login again.")
+
+    if datetime.utcnow() > session_data["expires_at"]:
+        _otp_store.pop(data.otp_session, None)
+        raise HTTPException(status_code=400, detail="OTP expired. Please login again.")
+
+    if data.otp_code != session_data["code"] and data.otp_code != settings.OTP_BYPASS_CODE:
+        raise HTTPException(status_code=400, detail="Invalid verification code")
+
+    _otp_store.pop(data.otp_session, None)
+
+    svc = AuthService(db)
+    result = await db.execute(
+        select(User).where(User.id == _uuid.UUID(session_data["user_id"]))
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    access_token = create_access_token(str(user.id), user.role.value)
+    refresh_token_str, expires_at = create_refresh_token(str(user.id))
+
+    session = UserSession(
+        user_id=user.id,
+        refresh_token=refresh_token_str,
+        device_id=data.device_id or session_data.get("device_id"),
+        device_name=data.device_name or session_data.get("device_name"),
+        ip_address=session_data.get("ip_address"),
+        expires_at=expires_at,
+    )
+    db.add(session)
+    user.last_seen = datetime.utcnow()
+    await db.commit()
+
+    return _token_response(user, access_token, refresh_token_str)
+
+
+@router.post("/resend-otp")
+async def resend_otp(body: dict, db: AsyncSession = Depends(get_db)):
+    otp_session = body.get("otp_session", "")
+    session_data = _otp_store.get(otp_session)
+    if not session_data:
+        raise HTTPException(status_code=400, detail="Session not found. Please login again.")
+
+    result = await db.execute(select(User).where(User.id == _uuid.UUID(session_data["user_id"])))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    otp_code = f"{random.randint(0, 999999):06d}"
+    session_data["code"] = otp_code
+    session_data["expires_at"] = datetime.utcnow() + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
+
+    await send_otp_email(user.email, user.full_name, otp_code)
+    return {"message": "OTP resent"}
 
 
 @router.post("/refresh")

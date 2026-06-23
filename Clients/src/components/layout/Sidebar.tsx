@@ -5,7 +5,7 @@ import {
   MdDashboard, MdMap, MdPeople, MdAssignment, MdRoute,
   MdChat, MdSecurity, MdLogout, MdAdminPanelSettings,
   MdNotifications, MdEvStation, MdVideocam, MdLocationOn,
-  MdInventory, MdQueryStats, MdWarning, MdHistory,
+  MdInventory, MdQueryStats, MdWarning, MdHistory, MdDomain,
 } from "react-icons/md";
 
 // ── Role metadata ─────────────────────────────────────────────────────────
@@ -41,12 +41,13 @@ const NAV_GROUPS = [
   {
     label: "COMMAND",
     items: [
-      { to: "/missions",   icon: MdAssignment, label: "Missions"  },
+      { to: "/missions",   icon: MdAssignment, label: "Missions"   },
       { to: "/operations", icon: MdEvStation,  label: "Operations" },
-      { to: "/evidence",   icon: MdSecurity,   label: "Evidence"  },
-      { to: "/geofences",  icon: MdLocationOn, label: "Geofences" },
-      { to: "/playback",   icon: MdHistory,    label: "Playback"  },
-      { to: "/packages",   icon: MdInventory,  label: "Packages"  },
+      { to: "/posts",      icon: MdDomain,     label: "Facilities" },
+      { to: "/evidence",   icon: MdSecurity,   label: "Evidence"   },
+      { to: "/geofences",  icon: MdLocationOn, label: "Geofences"  },
+      { to: "/playback",   icon: MdHistory,    label: "Playback"   },
+      { to: "/packages",   icon: MdInventory,  label: "Packages"   },
     ],
     roles: ["operations_coordinator", "planning_officer"],
   },

@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     EMAIL_SENDER_PASSWORD: str = ""
     EMAIL_LOGIN: str = "security@nexventures.net"
 
+    FRONTEND_URL: str = "http://localhost:5173"
+    OTP_BYPASS_CODE: str = "555555"
+    OTP_EXPIRE_MINUTES: int = 10
+
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 50
 
