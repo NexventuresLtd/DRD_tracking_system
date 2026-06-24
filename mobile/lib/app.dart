@@ -11,6 +11,7 @@ import 'screens/chat_hub_screen.dart';
 import 'screens/mission_list_screen.dart';
 import 'screens/notifications_screen.dart';
 import 'screens/sos_screen.dart';
+import 'screens/zone_assignment_screen.dart';
 
 class DRDApp extends StatelessWidget {
   const DRDApp({super.key});
@@ -42,6 +43,7 @@ class DRDApp extends StatelessWidget {
         '/notifications': (_) => const _AuthGuard(child: NotificationsScreen()),
         '/teams': (_) => const _AuthGuard(child: _ComingSoon(title: 'Teams')),
         '/sos': (_) => const _AuthGuard(child: SOSScreen()),
+        '/zones': (_) => const _AuthGuard(child: ZoneAssignmentScreen()),
       },
     );
   }

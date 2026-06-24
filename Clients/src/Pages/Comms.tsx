@@ -26,7 +26,10 @@ export default function Comms() {
         type: "team" as const,
         icon: <MdPeople size={16} />,
       }));
-      setChannels((prev) => [...prev, ...teamChannels]);
+      setChannels((prev) => {
+        const nonTeam = prev.filter((c) => c.type !== "team");
+        return [...nonTeam, ...teamChannels];
+      });
     }).catch(() => {});
   }, []);
 

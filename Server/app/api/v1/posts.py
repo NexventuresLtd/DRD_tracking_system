@@ -34,8 +34,10 @@ class PostCreate(BaseModel):
     visibility: FacilityVisibility = FacilityVisibility.all_personnel
     capacity: Optional[int] = None
     commander_name: Optional[str] = None
+    commander_user_id: Optional[uuid.UUID] = None
     contact_info: Optional[str] = None
     classification: str = "restricted"
+    threat_level: str = "green"
     allowed_team_ids: Optional[List[str]] = None
 
 
@@ -52,9 +54,15 @@ class PostUpdate(BaseModel):
     visibility: Optional[FacilityVisibility] = None
     capacity: Optional[int] = None
     commander_name: Optional[str] = None
+    commander_user_id: Optional[uuid.UUID] = None
     contact_info: Optional[str] = None
     classification: Optional[str] = None
+    threat_level: Optional[str] = None
     allowed_team_ids: Optional[List[str]] = None
+
+
+class ThreatLevelUpdate(BaseModel):
+    threat_level: str  # green, amber, red, black
 
 
 class GrantAccessRequest(BaseModel):
@@ -304,6 +312,7 @@ async def map_posts(
             "name": p.name,
             "facility_type": p.facility_type.value,
             "status": p.status.value,
+            "threat_level": getattr(p, "threat_level", "green"),
             "latitude": p.latitude,
             "longitude": p.longitude,
             "is_published": p.is_published,
@@ -312,4 +321,60 @@ async def map_posts(
             "mission": p.mission,
         }
         for p in posts if _can_view(p, user)
+    ]
+
+
+@router.patch("/{post_id}/threat-level")
+async def set_threat_level(
+    post_id: uuid.UUID,
+    body: ThreatLevelUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if body.threat_level not in ("green", "amber", "red", "black"):
+        raise HTTPException(422, "threat_level must be green, amber, red, or black")
+
+    result = await db.execute(select(Post).where(Post.id == post_id))
+    post = result.scalar_one_or_none()
+    if not post:
+        raise HTTPException(404, "Post not found")
+    if not _can_edit(post, current_user):
+        raise HTTPException(403, "Insufficient permissions")
+
+    post.threat_level = body.threat_level
+    post.updated_by = current_user.id
+    await db.commit()
+    return {"id": str(post.id), "threat_level": post.threat_level}
+
+
+@router.get("/search/commanders")
+async def search_commanders(
+    q: str = Query("", min_length=0),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return system users eligible to be facility commander (anyone with an account)."""
+    if current_user.role not in (COORDINATOR, PLANNING):
+        raise HTTPException(403, "Insufficient permissions")
+
+    from sqlalchemy import or_, func
+    query = select(User).where(User.is_active == True)
+    if q:
+        query = query.where(
+            or_(
+                func.lower(User.full_name).contains(q.lower()),
+                func.lower(User.username).contains(q.lower()),
+            )
+        )
+    result = await db.execute(query.limit(20))
+    users = result.scalars().all()
+    return [
+        {
+            "id": str(u.id),
+            "full_name": u.full_name,
+            "username": u.username,
+            "role": u.role.value,
+            "avatar_url": getattr(u, "avatar_url", None),
+        }
+        for u in users
     ]

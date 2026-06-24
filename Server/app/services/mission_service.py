@@ -1,12 +1,11 @@
 import uuid
 from datetime import datetime
 from typing import Optional
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.mission import Mission, MissionStatus, MissionObjective, MissionAssignment
-from app.models.user import User
 
 
 class MissionService:
@@ -23,6 +22,11 @@ class MissionService:
             end_date=data.get("end_date"),
             briefing_notes=data.get("briefing_notes"),
             area_of_operations=data.get("area_of_operations"),
+            briefing_datetime=data.get("briefing_datetime"),
+            briefing_audience=data.get("briefing_audience", "all"),
+            zone_ids=data.get("zone_ids", []),
+            route_ids=data.get("route_ids", []),
+            facility_ids=data.get("facility_ids", []),
         )
         self.db.add(mission)
         await self.db.flush()
@@ -42,13 +46,18 @@ class MissionService:
     async def get_by_id(self, mission_id: uuid.UUID) -> Optional[Mission]:
         result = await self.db.execute(
             select(Mission)
-            .options(selectinload(Mission.objectives), selectinload(Mission.assignments))
+            .options(
+                selectinload(Mission.objectives),
+                selectinload(Mission.assignments),
+                selectinload(Mission.incidents),
+                selectinload(Mission.casualties),
+            )
             .where(Mission.id == mission_id)
         )
         return result.scalar_one_or_none()
 
     async def list_missions(self, status: Optional[str] = None, limit: int = 50, offset: int = 0):
-        q = select(Mission).options(selectinload(Mission.objectives))
+        q = select(Mission).options(selectinload(Mission.objectives), selectinload(Mission.assignments))
         if status:
             q = q.where(Mission.status == MissionStatus(status))
         q = q.order_by(Mission.created_at.desc()).offset(offset).limit(limit)
@@ -59,7 +68,9 @@ class MissionService:
         mission = await self.get_by_id(mission_id)
         if not mission:
             return None
-        for field in ("name", "description", "briefing_notes", "area_of_operations", "start_date", "end_date"):
+        for field in ("name", "description", "briefing_notes", "area_of_operations",
+                      "start_date", "end_date", "briefing_datetime",
+                      "briefing_audience", "zone_ids", "route_ids", "facility_ids", "live_session_id"):
             if field in data:
                 setattr(mission, field, data[field])
         if "status" in data:

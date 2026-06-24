@@ -105,8 +105,24 @@ export const missionApi = {
   update: (id: string, data: object) => api.put(`/missions/${id}`, data),
   delete: (id: string) => api.delete(`/missions/${id}`),
   assign: (id: string, data: object) => api.post(`/missions/${id}/assignments`, data),
+  notify: (id: string, data: object) => api.post(`/missions/${id}/notify`, data),
   completeObjective: (missionId: string, objId: string) =>
     api.post(`/missions/${missionId}/objectives/${objId}/complete`),
+  startBriefing: (id: string) => api.post(`/missions/${id}/start-briefing`),
+  // Incidents
+  listIncidents: (id: string) => api.get(`/missions/${id}/incidents`),
+  reportIncident: (id: string, data: object) => api.post(`/missions/${id}/incidents`, data),
+  resolveIncident: (missionId: string, incidentId: string) =>
+    api.patch(`/missions/${missionId}/incidents/${incidentId}/resolve`),
+  // Casualties
+  listCasualties: (id: string) => api.get(`/missions/${id}/casualties`),
+  reportCasualty: (id: string, data: object) => api.post(`/missions/${id}/casualties`, data),
+  // Evidence approval
+  listEvidence: (id: string) => api.get(`/missions/${id}/evidence`),
+  approveEvidence: (missionId: string, evidenceId: string, action: "approve" | "reject") =>
+    api.patch(`/missions/${missionId}/evidence/${evidenceId}/approve`, { action }),
+  // Package download
+  downloadPackage: (id: string) => api.get(`/missions/${id}/package`),
 };
 
 export const locationApi = {
@@ -173,8 +189,15 @@ export const evidenceApi = {
 
 export const liveFeedApi = {
   list: () => api.get("/live-sessions"),
+  listPast: (params?: object) => api.get("/live-sessions/past", { params }),
   create: (data: object) => api.post("/live-sessions", data),
-  end: (id: string) => api.put(`/live-sessions/${id}/end`),
+  end: (id: string) => api.post(`/live-sessions/${id}/end`),
+};
+
+export const evidenceApi2 = {
+  list: () => api.get("/evidence"),
+  upload: (formData: FormData) => api.post("/evidence", formData, { headers: { "Content-Type": "multipart/form-data" } }),
+  delete: (id: string) => api.delete(`/evidence/${id}`),
 };
 
 export const postsApi = {
@@ -187,4 +210,23 @@ export const postsApi = {
   grantAccess: (id: string, user_id: string) => api.post(`/posts/${id}/grant-access`, { user_id }),
   revokeAccess: (id: string, userId: string) => api.delete(`/posts/${id}/grant-access/${userId}`),
   mapPosts: () => api.get("/posts/map/published"),
+  setThreatLevel: (id: string, threat_level: string) => api.patch(`/posts/${id}/threat-level`, { threat_level }),
+  searchCommanders: (q: string) => api.get("/posts/search/commanders", { params: { q } }),
+};
+
+export const zonesApi = {
+  list: () => api.get("/zones"),
+  create: (data: object) => api.post("/zones", data),
+  update: (id: string, data: object) => api.put(`/zones/${id}`, data),
+  delete: (id: string) => api.delete(`/zones/${id}`),
+  assignTeam: (id: string, team_id: string | null, status?: string) =>
+    api.put(`/zones/${id}/assign-team`, { team_id, assignment_status: status ?? "assigned" }),
+  getAssignments: (id: string) => api.get(`/zones/${id}/assignments`),
+  createAssignment: (id: string, data: object) => api.post(`/zones/${id}/assignments`, data),
+  updateAssignmentStatus: (zoneId: string, userId: string, status: string) =>
+    api.put(`/zones/${zoneId}/assignments/${userId}/status`, { status }),
+  removeAssignment: (zoneId: string, userId: string) =>
+    api.delete(`/zones/${zoneId}/assignments/${userId}`),
+  patrolReport: (id: string, data: object) => api.post(`/zones/${id}/patrol-report`, data),
+  myAssignments: () => api.get("/zones/my/assignments"),
 };

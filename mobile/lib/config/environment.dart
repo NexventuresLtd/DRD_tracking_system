@@ -1,3 +1,5 @@
+// Edit mobile/.env then run ./run.sh to change the server IP.
+// Or: flutter run --dart-define=API_BASE_URL=http://YOUR_IP:8000
 class EnvironmentConfig {
   static late String _apiBaseUrl;
   static late String _wsBaseUrl;
@@ -7,11 +9,11 @@ class EnvironmentConfig {
     _env = const String.fromEnvironment('ENV', defaultValue: 'development');
     _apiBaseUrl = const String.fromEnvironment(
       'API_BASE_URL',
-      defaultValue: 'http://localhost:1104',
+      defaultValue: 'http://192.168.1.73:8000',
     );
     _wsBaseUrl = const String.fromEnvironment(
       'WS_BASE_URL',
-      defaultValue: 'ws://localhost:1104',
+      defaultValue: 'ws://192.168.1.73:8000',
     );
   }
 

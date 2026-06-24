@@ -3,7 +3,8 @@ from app.models.user import User, UserSession, UserDevice
 from app.models.invite import Invite
 from app.models.team import Team, TeamMember
 from app.models.location import Location, LocationHistory
-from app.models.mission import Mission, MissionObjective, MissionAssignment
+from app.models.live_session import LiveSession
+from app.models.mission import Mission, MissionObjective, MissionAssignment, MissionIncident, CasualtyReport
 from app.models.route import Route, RouteWaypoint, RouteAssignment, RouteFollowSession
 from app.models.contact import Contact
 from app.models.drawing import Drawing, DrawingPoint
@@ -15,8 +16,7 @@ from app.models.call import Call, CallParticipant
 from app.models.notification import Notification
 from app.models.audit import AuditLog
 from app.models.sos import SOSEvent
-from app.models.zone import Zone
-from app.models.live_session import LiveSession
+from app.models.zone import Zone, ZoneAssignment
 from app.models.checkpoint import Checkpoint
 from app.models.resource import ResourceItem
 from app.models.package import MissionPackage, MissionPackageItem
@@ -28,7 +28,8 @@ __all__ = [
     "Invite",
     "Team", "TeamMember",
     "Location", "LocationHistory",
-    "Mission", "MissionObjective", "MissionAssignment",
+    "LiveSession",
+    "Mission", "MissionObjective", "MissionAssignment", "MissionIncident", "CasualtyReport",
     "Route", "RouteWaypoint", "RouteAssignment", "RouteFollowSession",
     "Contact",
     "Drawing", "DrawingPoint",
@@ -40,8 +41,7 @@ __all__ = [
     "Notification",
     "AuditLog",
     "SOSEvent",
-    "Zone",
-    "LiveSession",
+    "Zone", "ZoneAssignment",
     "Checkpoint",
     "ResourceItem",
     "MissionPackage", "MissionPackageItem",

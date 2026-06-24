@@ -49,23 +49,29 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Container(
+              Image.asset(
+                'lib/assets/images/logo1.png',
                 width: 80,
                 height: 80,
-                decoration: BoxDecoration(
-                  color: const Color(0xFF2563EB),
-                  borderRadius: BorderRadius.circular(20),
+                errorBuilder: (ctx, err, st) => Container(
+                  width: 80, height: 80,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF052e16),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: const Color(0xFF16a34a)),
+                  ),
+                  child: const Icon(Icons.security, color: Color(0xFF22c55e), size: 40),
                 ),
-                child: const Icon(Icons.security, color: Colors.white, size: 40),
               ),
               const SizedBox(height: 20),
               const Text(
-                'DRD System',
+                'DRD OPERATIONS',
                 style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 26,
+                  color: Color(0xFF22c55e),
+                  fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  letterSpacing: 1,
+                  letterSpacing: 3,
+                  fontFamily: 'monospace',
                 ),
               ),
               const SizedBox(height: 6),

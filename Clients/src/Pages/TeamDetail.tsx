@@ -29,9 +29,14 @@ function memberIcon(color: string) {
   });
 }
 
-interface TeamMember { id: string; full_name: string; email: string; role: string; phone?: string; }
+interface UserInfo { id: string; full_name?: string; email?: string; role?: string; username?: string; }
+interface TeamMember { id: string; user_id: string; team_id: string; role_in_team: string; joined_at: string; user?: UserInfo; }
 interface TeamInfo { id: string; name: string; description?: string; leader_id?: string; }
 interface LiveLoc { user_id: string; latitude: number; longitude: number; status: string; }
+
+function memberName(m: TeamMember) { return m.user?.full_name ?? m.user?.username ?? "Unknown"; }
+function memberRole(m: TeamMember) { return m.user?.role ?? m.role_in_team ?? "member"; }
+function memberEmail(m: TeamMember) { return m.user?.email ?? ""; }
 
 export default function TeamDetail() {
   const { id } = useParams<{ id: string }>();
@@ -60,7 +65,7 @@ export default function TeamDetail() {
 
   const removeMember = async (uid: string) => {
     if (!confirm("Remove this member?")) return;
-    try { await api.delete(`/teams/${id}/members/${uid}`); setMembers((prev) => prev.filter((m) => m.id !== uid)); } catch { /**/ }
+    try { await api.delete(`/teams/${id}/members/${uid}`); setMembers((prev) => prev.filter((m) => m.user_id !== uid)); } catch { /**/ }
   };
 
   const canManage = me && ["operations_coordinator", "planning_officer"].includes(me.role);
@@ -106,29 +111,31 @@ export default function TeamDetail() {
               <p className="p-4 text-center text-gray-500 text-sm">No members</p>
             ) : (
               members.map((m) => {
-                const color = ROLE_COLORS[m.role] ?? "#6b7280";
-                const isLeader = m.id === team.leader_id;
-                const loc = locations.find((l) => l.user_id === m.id);
+                const role = memberRole(m);
+                const color = ROLE_COLORS[role] ?? "#6b7280";
+                const isLeader = m.user_id === team.leader_id;
+                const loc = locations.find((l) => l.user_id === m.user_id);
+                const name = memberName(m);
                 return (
                   <div key={m.id} className="px-5 py-3 flex items-center gap-3">
                     <div className="w-9 h-9 rounded-full flex items-center justify-center font-bold text-sm shrink-0"
                       style={{ background: `${color}20`, color, border: `1px solid ${color}40` }}>
-                      {m.full_name.charAt(0).toUpperCase()}
+                      {(name).charAt(0).toUpperCase()}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <p className="text-white text-sm font-medium truncate">{m.full_name}</p>
+                        <p className="text-white text-sm font-medium truncate">{name}</p>
                         {isLeader && <span className="text-xs px-1.5 py-0.5 rounded" style={{ background: "#16653430", color: "#4ade80" }}>Leader</span>}
                       </div>
-                      <p className="text-gray-500 text-xs truncate">{m.email}</p>
+                      <p className="text-gray-500 text-xs truncate">{memberEmail(m)}</p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
                       <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: `${color}15`, color }}>
-                        {ROLE_LABELS[m.role] ?? m.role}
+                        {ROLE_LABELS[role] ?? role}
                       </span>
                       {loc && <span className="w-2 h-2 rounded-full" style={{ background: "#22c55e" }} title="Online" />}
-                      {canManage && m.id !== me?.id && (
-                        <button onClick={() => removeMember(m.id)} className="text-gray-600 hover:text-red-400 text-xs">✕</button>
+                      {canManage && m.user_id !== me?.id && (
+                        <button onClick={() => removeMember(m.user_id)} className="text-gray-600 hover:text-red-400 text-xs">✕</button>
                       )}
                     </div>
                   </div>
@@ -150,13 +157,14 @@ export default function TeamDetail() {
                 subdomains={["a", "b", "c"]}
               />
               {locations.map((loc) => {
-                const member = members.find((m) => m.id === loc.user_id);
-                const color = ROLE_COLORS[member?.role ?? "field_user"] ?? "#22c55e";
+                const member = members.find((m) => m.user_id === loc.user_id);
+                const role = memberRole(member ?? { id: "", user_id: loc.user_id, team_id: "", role_in_team: "field_user", joined_at: "" });
+                const color = ROLE_COLORS[role] ?? "#22c55e";
                 return (
                   <Marker key={loc.user_id} position={[loc.latitude, loc.longitude]} icon={memberIcon(color)}>
                     <Popup>
                       <div style={{ color: "#fff", background: "#060d06", padding: "4px 8px", borderRadius: 6 }}>
-                        <strong>{member?.full_name ?? "Unknown"}</strong>
+                        <strong>{member ? memberName(member) : "Unknown"}</strong>
                         <br /><span style={{ color: "#9ca3af", fontSize: 11 }}>{loc.status}</span>
                       </div>
                     </Popup>

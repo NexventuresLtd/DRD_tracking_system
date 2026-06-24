@@ -7,6 +7,7 @@ import 'providers/location_provider.dart';
 import 'providers/team_provider.dart';
 import 'providers/route_provider.dart';
 import 'providers/message_provider.dart';
+import 'providers/zone_provider.dart';
 import 'services/storage_service.dart';
 
 void main() async {
@@ -27,6 +28,7 @@ void main() async {
         ChangeNotifierProvider(create: (_) => TeamProvider()),
         ChangeNotifierProvider(create: (_) => RouteProvider()),
         ChangeNotifierProvider(create: (_) => MessageProvider()),
+        ChangeNotifierProvider(create: (_) => ZoneProvider()),
       ],
       child: const DRDApp(),
     ),

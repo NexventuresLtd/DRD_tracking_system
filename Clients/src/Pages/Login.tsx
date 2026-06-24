@@ -145,9 +145,9 @@ export default function Login() {
         <div className="login-hero">
           <div className="login-hero-label">PLATFORM CAPABILITIES</div>
           <h2 className="login-hero-title">
-            Unified<br />
-            <span className="login-hero-accent">Tactical</span><br />
-            Operations
+            Unified {" "}
+            <span className="login-hero-accent">Tactical</span>
+           {" "} Operations 
           </h2>
           <div className="login-hero-bar" />
           <p className="login-hero-desc">
@@ -214,37 +214,46 @@ export default function Login() {
               <form onSubmit={handleCredentials} className="login-form">
                 <div className="login-field">
                   <label className="login-label">Email or Username</label>
-                  <input
-                    type="text"
-                    required
-                    autoComplete="username"
-                    value={form.email}
-                    placeholder="your@email.com or username"
-                    onChange={(e) => setForm({ ...form, email: e.target.value })}
-                    className="login-input"
-                  />
+                  <div className="login-input-wrap">
+                    <span className="login-input-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+                    </span>
+                    <input
+                      type="text"
+                      required
+                      autoComplete="username"
+                      value={form.email}
+                      placeholder="username or email"
+                      onChange={(e) => setForm({ ...form, email: e.target.value })}
+                      className="login-input login-input-padded"
+                    />
+                  </div>
                 </div>
 
                 <div className="login-field">
                   <div className="login-label-row">
                     <label className="login-label">Password</label>
-                    <button
-                      type="button"
-                      className="login-show-btn"
-                      onClick={() => setShowPass(!showPass)}
-                    >
-                      {showPass ? "Hide" : "Show"}
+                  </div>
+                  <div className="login-input-wrap">
+                    <span className="login-input-icon">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                    </span>
+                    <input
+                      type={showPass ? "text" : "password"}
+                      required
+                      autoComplete="current-password"
+                      value={form.password}
+                      placeholder="••••••••••••"
+                      onChange={(e) => setForm({ ...form, password: e.target.value })}
+                      className="login-input login-input-padded login-input-with-right"
+                    />
+                    <button type="button" className="login-input-icon-right" onClick={() => setShowPass(!showPass)}>
+                      {showPass
+                        ? <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+                        : <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      }
                     </button>
                   </div>
-                  <input
-                    type={showPass ? "text" : "password"}
-                    required
-                    autoComplete="current-password"
-                    value={form.password}
-                    placeholder="••••••••••••"
-                    onChange={(e) => setForm({ ...form, password: e.target.value })}
-                    className="login-input"
-                  />
                 </div>
 
                 <button type="submit" disabled={loading} className="login-btn">
@@ -438,8 +447,8 @@ const CSS = `
   .login-hero-bar { width: 40px; height: 3px; background: #16a34a; margin-bottom: 20px; }
 
   .login-hero-desc {
-    color: #374151; font-size: 13px; line-height: 1.7; margin: 0;
-    max-width: 340px;
+    color: #374151; font-size: 15px; line-height: 1.7; margin: 0;
+    max-width: 440px;
   }
 
   .login-caps { display: flex; flex-direction: column; gap: 6px; }
@@ -519,10 +528,12 @@ const CSS = `
 
   /* Card */
   .login-card {
-    background: rgba(10,18,10,0.9);
+    background: rgba(10,18,10,0.95);
     border: 1px solid rgba(22,163,74,0.15);
+    border-top: 2px solid #16a34a;
     padding: 32px 28px;
-    box-shadow: 0 0 40px rgba(22,163,74,0.05), 0 4px 24px rgba(0,0,0,0.6);
+    box-shadow: 0 0 60px rgba(22,163,74,0.07), 0 8px 32px rgba(0,0,0,0.6);
+    border-radius: 4px;
   }
 
   .login-card-header { margin-bottom: 24px; }
@@ -568,6 +579,27 @@ const CSS = `
 
   .login-label { color: #6b7280; font-size: 12px; font-weight: 500; }
 
+  .login-input-wrap {
+    position: relative; display: flex; align-items: center;
+  }
+
+  .login-input-icon {
+    position: absolute; left: 13px;
+    color: rgba(22,163,74,0.45);
+    display: flex; align-items: center;
+    pointer-events: none; z-index: 1;
+  }
+
+  .login-input-icon-right {
+    position: absolute; right: 0; top: 0; bottom: 0;
+    padding: 0 13px;
+    display: flex; align-items: center;
+    cursor: pointer; color: rgba(22,163,74,0.35);
+    background: none; border: none; z-index: 1;
+    transition: color 0.15s;
+  }
+  .login-input-icon-right:hover { color: #22c55e; }
+
   .login-input {
     width: 100%; padding: 12px 14px;
     background: #050d05;
@@ -576,23 +608,18 @@ const CSS = `
     outline: none; font-family: 'Inter', sans-serif;
     transition: border-color 0.15s, box-shadow 0.15s;
     -webkit-appearance: none;
+    border-radius: 3px;
   }
 
-  .login-input::placeholder { color: #374151; }
+  .login-input-padded { padding-left: 40px; }
+  .login-input-with-right { padding-right: 42px; }
+
+  .login-input::placeholder { color: #2a3f2a; }
 
   .login-input:focus {
     border-color: #16a34a;
     box-shadow: 0 0 0 3px rgba(22,163,74,0.1);
   }
-
-  .login-show-btn {
-    background: none; border: none; cursor: pointer;
-    color: #374151; font-size: 12px; padding: 0;
-    font-family: 'Inter', sans-serif;
-    transition: color 0.1s;
-  }
-
-  .login-show-btn:hover { color: #22c55e; }
 
   /* Submit button */
   .login-btn {

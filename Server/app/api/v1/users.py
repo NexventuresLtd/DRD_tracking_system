@@ -113,3 +113,27 @@ async def delete_user(
 
     await svc.deactivate(user)
     return {"message": "User deactivated"}
+
+
+@router.post("/{user_id}/change-password")
+async def change_password(
+    user_id: uuid.UUID,
+    body: dict,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    if current_user.id != user_id:
+        raise HTTPException(status_code=403, detail="Can only change your own password")
+
+    from app.services.auth_service import verify_password, hash_password
+
+    if not verify_password(body.get("current_password", ""), current_user.hashed_password):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    new_pw = body.get("new_password", "")
+    if len(new_pw) < 8:
+        raise HTTPException(status_code=400, detail="Password must be at least 8 characters")
+
+    current_user.hashed_password = hash_password(new_pw)
+    await db.commit()
+    return {"message": "Password updated successfully"}

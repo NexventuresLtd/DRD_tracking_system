@@ -77,6 +77,12 @@ class Post(Base):
     # Users (planning_officers) granted edit access - list of user UUIDs
     editor_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
+    # Threat level — updated based on field reports / proximity to hostile activity
+    threat_level: Mapped[str] = mapped_column(String(10), default="green")  # green, amber, red, black
+
+    # Commander linked to a system user (optional)
+    commander_user_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
     # Audit
     created_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     updated_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)

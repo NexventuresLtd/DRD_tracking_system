@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { MdLocationOn, MdWarning } from "react-icons/md";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 
@@ -143,9 +144,9 @@ export default function SOSPage() {
               style={{ background: "#3b0a0a", border: "2px solid #dc2626" }}>
               <div className="flex items-start justify-between">
                 <div>
-                  <p className="text-red-300 font-bold text-sm">⚠ ACTIVE SOS — {fmtDate(e.created_at)}</p>
+                  <p className="text-red-300 font-bold text-sm flex items-center gap-1"><MdWarning size={14} /> ACTIVE SOS — {fmtDate(e.created_at)}</p>
                   {e.message && <p className="text-red-200 text-sm mt-1">"{e.message}"</p>}
-                  {e.latitude && <p className="text-red-400 text-xs mt-1">📍 {e.latitude.toFixed(5)}, {e.longitude?.toFixed(5)}</p>}
+                  {e.latitude && <p className="text-red-400 text-xs mt-1 flex items-center gap-1"><MdLocationOn size={11} /> {e.latitude.toFixed(5)}, {e.longitude?.toFixed(5)}</p>}
                 </div>
                 {canAck && (
                   <div className="flex gap-2 shrink-0">
@@ -191,7 +192,7 @@ export default function SOSPage() {
                       <span className="text-gray-400 text-xs">{fmtDate(e.created_at)}</span>
                     </div>
                     {e.message && <p className="text-gray-300 text-sm mt-1">"{e.message}"</p>}
-                    {e.latitude && <p className="text-gray-500 text-xs mt-1">📍 {e.latitude.toFixed(5)}, {e.longitude?.toFixed(5)}</p>}
+                    {e.latitude && <p className="text-gray-500 text-xs mt-1 flex items-center gap-1"><MdLocationOn size={11} /> {e.latitude.toFixed(5)}, {e.longitude?.toFixed(5)}</p>}
                     {e.acknowledged_at && (
                       <p className="text-yellow-600 text-xs mt-1">ACK {fmtDate(e.acknowledged_at)}</p>
                     )}

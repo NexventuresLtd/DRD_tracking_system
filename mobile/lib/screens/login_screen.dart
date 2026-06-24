@@ -135,7 +135,7 @@ class _LoginScreenState extends State<LoginScreen> {
     return Row(
       children: [
         Image.asset(
-          'assets/images/logo1.png',
+          'lib/assets/images/logo1.png',
           height: 42,
           errorBuilder: (ctx, err, stack) => Container(
             width: 42, height: 42,

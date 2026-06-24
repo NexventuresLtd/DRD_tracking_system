@@ -34,17 +34,13 @@ class _HomeScreenState extends State<HomeScreen> {
               pinned: true,
               title: Row(
                 children: [
-                  Container(
-                    width: 32,
+                  Image.asset(
+                    'lib/assets/images/logo1.png',
                     height: 32,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF2563EB),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Icon(Icons.security, color: Colors.white, size: 18),
+                    errorBuilder: (ctx, err, st) => const Icon(Icons.security, color: Color(0xFF22c55e), size: 28),
                   ),
                   const SizedBox(width: 10),
-                  const Text('DRD System', style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold)),
+                  const Text('DRD OPERATIONS', style: TextStyle(color: Color(0xFF22c55e), fontSize: 14, fontWeight: FontWeight.bold, letterSpacing: 1.5, fontFamily: 'monospace')),
                 ],
               ),
               actions: [
@@ -327,6 +323,7 @@ class _BottomNav extends StatelessWidget {
         children: [
           _NavItem(icon: Icons.home_outlined, label: 'Home', onTap: () {}),
           _NavItem(icon: Icons.map_outlined, label: 'Map', onTap: () => Navigator.pushNamed(context, '/map')),
+          _NavItem(icon: Icons.crop_free_outlined, label: 'Zones', onTap: () => Navigator.pushNamed(context, '/zones')),
           _NavItem(icon: Icons.chat_bubble_outline, label: 'Comms', onTap: () => Navigator.pushNamed(context, '/comms')),
           _NavItem(icon: Icons.person_outline, label: 'Profile', onTap: () => Navigator.pushNamed(context, '/profile')),
         ],

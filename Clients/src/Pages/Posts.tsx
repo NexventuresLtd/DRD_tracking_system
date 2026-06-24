@@ -1,4 +1,7 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { MapContainer, TileLayer, useMapEvents, Marker } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import { postsApi, userApi } from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 
@@ -36,6 +39,25 @@ const STATUS_COLORS: Record<string, string> = {
 
 const CLASSIFICATIONS = ["unclassified", "restricted", "confidential", "secret"];
 
+const THREAT_COLORS: Record<string, { bg: string; text: string; label: string }> = {
+  green: { bg: "#14532d", text: "#22c55e", label: "GREEN — Secure" },
+  amber: { bg: "#451a03", text: "#f59e0b", label: "AMBER — Caution" },
+  red:   { bg: "#450a0a", text: "#ef4444", label: "RED — Threat Active" },
+  black: { bg: "#111827", text: "#9ca3af", label: "BLACK — Compromised" },
+};
+
+// Dynamic required / suggested fields per facility type
+const TYPE_HINTS: Record<string, string> = {
+  medical_center: "Set capacity (patient beds). Contact is the medical officer.",
+  armory: "Classification should be Confidential or Secret.",
+  airfield: "Capacity = max aircraft slots. Contact = air traffic control.",
+  detention_center: "Classification should be at least Restricted.",
+  intelligence_post: "Classification should be Secret. Description will be restricted.",
+  safe_house: "Visibility should be Planning Only for security.",
+  logistics_depot: "Set capacity for tonnage/vehicle count.",
+  barracks: "Capacity = number of personnel quarters.",
+};
+
 type Post = {
   id: string;
   name: string;
@@ -51,8 +73,10 @@ type Post = {
   visibility: string;
   capacity?: number;
   commander_name?: string;
+  commander_user_id?: string;
   contact_info?: string;
   classification: string;
+  threat_level: string;
   allowed_team_ids: string[];
   editor_ids?: string[];
   can_edit: boolean;
@@ -74,10 +98,58 @@ const BLANK: Omit<Post, "id" | "can_edit" | "created_at" | "updated_at" | "edito
   visibility: "all_personnel",
   capacity: undefined,
   commander_name: "",
+  commander_user_id: undefined,
   contact_info: "",
   classification: "restricted",
+  threat_level: "green",
   allowed_team_ids: [],
 };
+
+// ── Map Picker sub-component ────────────────────────────────────────────────
+
+function MapClickLayer({ onPick }: { onPick: (lat: number, lng: number) => void }) {
+  useMapEvents({ click(e) { onPick(e.latlng.lat, e.latlng.lng); } });
+  return null;
+}
+
+function MapPicker({ lat, lng, onPick, onClose }: { lat: number; lng: number; onPick: (lat: number, lng: number) => void; onClose: () => void }) {
+  const [picked, setPicked] = useState<{ lat: number; lng: number } | null>(lat && lng ? { lat, lng } : null);
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.9)", zIndex: 2000, display: "flex", flexDirection: "column" }}>
+      <div style={{ padding: "12px 16px", background: "#050d05", borderBottom: "1px solid #0f1f0f", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <span style={{ color: "#22c55e", fontFamily: "'JetBrains Mono', monospace", fontSize: 12, letterSpacing: 2 }}>
+          PICK LOCATION — {picked ? `${picked.lat.toFixed(5)}, ${picked.lng.toFixed(5)}` : "Click on map"}
+        </span>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button
+            onClick={() => picked && onPick(picked.lat, picked.lng)}
+            disabled={!picked}
+            style={{ padding: "6px 16px", background: picked ? "#16a34a" : "#1f2d1f", border: "none", color: "#fff", cursor: picked ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 700 }}
+          >
+            CONFIRM
+          </button>
+          <button onClick={onClose} style={{ padding: "6px 12px", background: "none", border: "1px solid #374151", color: "#6b7280", cursor: "pointer", fontSize: 12 }}>Cancel</button>
+        </div>
+      </div>
+      <div style={{ flex: 1 }}>
+        <MapContainer
+          center={picked ? [picked.lat, picked.lng] : [-1.9441, 30.0619]}
+          zoom={10}
+          style={{ height: "100%", width: "100%" }}
+        >
+          <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" attribution="©CARTO" />
+          <MapClickLayer onPick={(lat, lng) => setPicked({ lat, lng })} />
+          {picked && (
+            <Marker
+              position={[picked.lat, picked.lng]}
+              icon={L.divIcon({ className: "", html: `<div style="width:12px;height:12px;background:#22c55e;border:2px solid #fff;border-radius:50%;"></div>`, iconSize: [12, 12], iconAnchor: [6, 6] })}
+            />
+          )}
+        </MapContainer>
+      </div>
+    </div>
+  );
+}
 
 // ── Sub-components ─────────────────────────────────────────────────────────
 
@@ -148,8 +220,25 @@ function PostModal({
 }) {
   const [form, setForm] = useState<any>(initial ? { ...initial } : { ...BLANK });
   const [saving, setSaving] = useState(false);
+  const [showMapPicker, setShowMapPicker] = useState(false);
+  const [commanderSearch, setCommanderSearch] = useState("");
+  const [commanderResults, setCommanderResults] = useState<any[]>([]);
+  const [selectedCommander, setSelectedCommander] = useState<any>(null);
 
   const set = (k: string, v: any) => setForm((f: any) => ({ ...f, [k]: v }));
+
+  const searchCommanders = useCallback(async (q: string) => {
+    if (!q) { setCommanderResults([]); return; }
+    try {
+      const { data } = await postsApi.searchCommanders(q);
+      setCommanderResults(data);
+    } catch { setCommanderResults([]); }
+  }, []);
+
+  useEffect(() => {
+    const t = setTimeout(() => searchCommanders(commanderSearch), 300);
+    return () => clearTimeout(t);
+  }, [commanderSearch, searchCommanders]);
 
   const handleSave = async () => {
     if (!form.name || !form.latitude || !form.longitude) return;
@@ -159,6 +248,7 @@ function PostModal({
   };
 
   const isCoord = role === "operations_coordinator";
+  const typeHint = TYPE_HINTS[form.facility_type];
 
   const Row = ({ label, children }: { label: string; children: React.ReactNode }) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -219,8 +309,15 @@ function PostModal({
             </Row>
           </div>
 
-          {/* Grid 2: Lat + Lon */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {/* Type hint */}
+          {typeHint && (
+            <div style={{ background: "#0f2d0f", border: "1px solid #14532d", padding: "8px 12px", fontSize: 10, color: "#22c55e", fontFamily: "'JetBrains Mono', monospace", letterSpacing: 0.5 }}>
+              ⚑ {typeHint}
+            </div>
+          )}
+
+          {/* Grid 2: Lat + Lon + Map Picker */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 12, alignItems: "end" }}>
             <Row label="Latitude">
               <input style={inputStyle} type="number" step="any" value={form.latitude}
                 onChange={(e) => set("latitude", parseFloat(e.target.value))} placeholder="-1.9441" />
@@ -229,7 +326,23 @@ function PostModal({
               <input style={inputStyle} type="number" step="any" value={form.longitude}
                 onChange={(e) => set("longitude", parseFloat(e.target.value))} placeholder="30.0619" />
             </Row>
+            <button
+              onClick={() => setShowMapPicker(true)}
+              style={{ padding: "9px 12px", background: "#052e16", border: "1px solid #15803d", color: "#22c55e", cursor: "pointer", fontSize: 11, whiteSpace: "nowrap", fontFamily: "'JetBrains Mono', monospace" }}
+              title="Pick location on map"
+            >
+              📍 MAP
+            </button>
           </div>
+
+          {showMapPicker && (
+            <MapPicker
+              lat={form.latitude}
+              lng={form.longitude}
+              onPick={(lat, lng) => { set("latitude", parseFloat(lat.toFixed(6))); set("longitude", parseFloat(lng.toFixed(6))); setShowMapPicker(false); }}
+              onClose={() => setShowMapPicker(false)}
+            />
+          )}
 
           {/* Address + Region */}
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr", gap: 12 }}>
@@ -253,15 +366,74 @@ function PostModal({
               placeholder="What this facility does / its operational role" />
           </Row>
 
+          {/* Threat Level */}
+          <Row label="Threat Level">
+            <div style={{ display: "flex", gap: 6 }}>
+              {Object.entries(THREAT_COLORS).map(([level, meta]) => (
+                <button
+                  key={level}
+                  onClick={() => set("threat_level", level)}
+                  style={{
+                    flex: 1, padding: "7px 4px", fontSize: 9, letterSpacing: 1,
+                    fontFamily: "'JetBrains Mono', monospace", cursor: "pointer",
+                    background: form.threat_level === level ? meta.bg : "#050d05",
+                    border: `1px solid ${form.threat_level === level ? meta.text : "#1f2d1f"}`,
+                    color: form.threat_level === level ? meta.text : "#374151",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  {level}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 10, color: THREAT_COLORS[form.threat_level]?.text ?? "#22c55e", fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
+              {THREAT_COLORS[form.threat_level]?.label}
+            </div>
+          </Row>
+
           {/* Commander + Contact */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-            <Row label="Commander / OIC">
-              <input style={inputStyle} value={form.commander_name || ""} onChange={(e) => set("commander_name", e.target.value)} placeholder="Name" />
+            <Row label="Commander / OIC (free text)">
+              <input style={inputStyle} value={form.commander_name || ""} onChange={(e) => set("commander_name", e.target.value)} placeholder="Name or callsign" />
             </Row>
             <Row label="Contact Info">
               <input style={inputStyle} value={form.contact_info || ""} onChange={(e) => set("contact_info", e.target.value)} placeholder="Radio freq, phone, etc." />
             </Row>
           </div>
+
+          {/* Commander linked to system user */}
+          <Row label="Commander (System User)">
+            <div style={{ position: "relative" }}>
+              <input
+                style={inputStyle}
+                value={selectedCommander ? `${selectedCommander.full_name} (@${selectedCommander.username})` : commanderSearch}
+                onChange={(e) => { setSelectedCommander(null); set("commander_user_id", undefined); setCommanderSearch(e.target.value); }}
+                placeholder="Search by name or username…"
+              />
+              {commanderResults.length > 0 && !selectedCommander && (
+                <div style={{ position: "absolute", top: "100%", left: 0, right: 0, background: "#0a120a", border: "1px solid #1f2d1f", zIndex: 100, maxHeight: 160, overflowY: "auto" }}>
+                  {commanderResults.map((u) => (
+                    <button
+                      key={u.id}
+                      onClick={() => { setSelectedCommander(u); set("commander_user_id", u.id); setCommanderSearch(""); setCommanderResults([]); }}
+                      style={{ width: "100%", display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", background: "none", border: "none", cursor: "pointer", textAlign: "left", borderBottom: "1px solid #0f1f0f" }}
+                    >
+                      <div style={{ width: 26, height: 26, borderRadius: "50%", background: "#14532d", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, color: "#22c55e", flexShrink: 0 }}>
+                        {u.full_name?.charAt(0) ?? "?"}
+                      </div>
+                      <div>
+                        <div style={{ color: "#d1fae5", fontSize: 12 }}>{u.full_name}</div>
+                        <div style={{ color: "#4b5563", fontSize: 10 }}>@{u.username} · {u.role.replace(/_/g, " ")}</div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {selectedCommander && (
+                <button onClick={() => { setSelectedCommander(null); set("commander_user_id", undefined); }} style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 14 }}>✕</button>
+              )}
+            </div>
+          </Row>
 
           {/* Status + Classification + Capacity */}
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12 }}>

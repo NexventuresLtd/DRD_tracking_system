@@ -1,8 +1,24 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { MapContainer, TileLayer, Polyline, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
+import { MdOutlineFolderOpen, MdClose } from "react-icons/md";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
+
+function parseCSV(text: string): { lat: number; lng: number }[] {
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  const pts: { lat: number; lng: number }[] = [];
+  for (const line of lines) {
+    const cols = line.split(/[,;\t]/).map((c) => c.trim());
+    const nums = cols.map(Number).filter((n) => !isNaN(n));
+    if (nums.length >= 2) {
+      const [a, b] = nums;
+      if (Math.abs(a) <= 90 && Math.abs(b) <= 180) pts.push({ lat: a, lng: b });
+      else if (Math.abs(b) <= 90 && Math.abs(a) <= 180) pts.push({ lat: b, lng: a });
+    }
+  }
+  return pts;
+}
 
 // Fix default icon issue
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -35,6 +51,7 @@ export default function RoutesPage() {
   const [waypoints, setWaypoints] = useState<Waypoint[]>([]);
   const [form, setForm] = useState({ name: "", description: "", route_type: "patrol", color: "#22c55e" });
   const [saving, setSaving] = useState(false);
+  const csvRef = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     try {
@@ -120,6 +137,26 @@ export default function RoutesPage() {
                 className="w-10 h-10 rounded-lg cursor-pointer border-0"
                 style={{ background: "#040804", border: "1px solid #374151" }} />
             </div>
+            {/* CSV upload */}
+            <div>
+              <input ref={csvRef} type="file" accept=".csv,.txt" className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (!f) return;
+                  const reader = new FileReader();
+                  reader.onload = (ev) => {
+                    const pts = parseCSV(ev.target?.result as string);
+                    if (pts.length > 0) setWaypoints(pts.map((p) => ({ lat: p.lat, lng: p.lng })));
+                    e.target.value = "";
+                  };
+                  reader.readAsText(f);
+                }} />
+              <button type="button" onClick={() => csvRef.current?.click()}
+                className="w-full py-1.5 rounded-lg text-xs font-medium border-dashed"
+                style={{ background: "#040804", border: "1px dashed #374151", color: "#6b7280" }}>
+                <MdOutlineFolderOpen className="inline mr-1.5" size={13} /> Upload CSV (lat, lng per row)
+              </button>
+            </div>
             <div className="text-xs text-gray-500 px-1">
               {waypoints.length < 2 ? `Click map to add waypoints (${waypoints.length} added, need ≥2)` : `${waypoints.length} waypoints — ready to save`}
             </div>
@@ -128,7 +165,7 @@ export default function RoutesPage() {
                 {waypoints.map((w, i) => (
                   <div key={i} className="flex items-center justify-between px-2 py-1 rounded text-xs" style={{ background: "#0a140a" }}>
                     <span className="text-gray-300">WP{i + 1} {w.lat.toFixed(4)}, {w.lng.toFixed(4)}</span>
-                    <button onClick={() => removeWaypoint(i)} className="text-red-400 hover:text-red-300 ml-2">✕</button>
+                    <button onClick={() => removeWaypoint(i)} className="text-red-400 hover:text-red-300 ml-2"><MdClose size={13} /></button>
                   </div>
                 ))}
               </div>
@@ -160,7 +197,7 @@ export default function RoutesPage() {
                   <p className="text-gray-500 text-xs capitalize">{r.route_type} · {r.waypoint_count} waypoints</p>
                 </div>
                 {canEdit && (
-                  <button onClick={(e) => deleteRoute(r.id, e)} className="text-gray-600 hover:text-red-400 text-xs shrink-0">✕</button>
+                  <button onClick={(e) => deleteRoute(r.id, e)} className="text-gray-600 hover:text-red-400 text-xs shrink-0"><MdClose size={13} /></button>
                 )}
               </div>
             ))

@@ -1,11 +1,19 @@
-import { useEffect, useRef, useState } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { MapContainer, TileLayer, Marker, Popup, useMap, Polygon, Circle, Rectangle, Polyline } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { locationApi, postsApi } from "../services/api";
+import { locationApi, postsApi, zonesApi } from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 import type { LiveLocation } from "../types";
-import { MdMyLocation, MdLayers, MdRefresh, MdClose, MdDomain } from "react-icons/md";
+import { MdMyLocation, MdLayers, MdRefresh, MdClose, MdDomain, MdCropFree, MdAltRoute } from "react-icons/md";
+
+const FACILITY_CACHE_KEY = "drd_facilities_cache";
+const THREAT_COLORS: Record<string, string> = {
+  green: "#22c55e",
+  amber: "#f59e0b",
+  red: "#ef4444",
+  black: "#111827",
+};
 
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
@@ -99,18 +107,22 @@ const FACILITY_META: Record<string, { icon: string; color: string }> = {
   other:                   { icon: "◌", color: "#4b5563" },
 };
 
-function makeFacilityIcon(type: string) {
+function makeFacilityIcon(type: string, threatLevel?: string) {
   const meta = FACILITY_META[type] || FACILITY_META.other;
+  const threat = threatLevel ?? "green";
+  const threatColor = THREAT_COLORS[threat] ?? "#22c55e";
+  const threatBadge = threat !== "green"
+    ? `<div style="position:absolute;top:-4px;right:-4px;width:10px;height:10px;border-radius:50%;background:${threatColor};border:1px solid #000;"></div>`
+    : "";
   return L.divIcon({
     className: "",
-    html: `<div style="
-      width:32px;height:32px;
+    html: `<div style="position:relative;width:32px;height:32px;
       background:${meta.color}22;
-      border:2px solid ${meta.color};
+      border:2px solid ${threatColor};
       display:flex;align-items:center;justify-content:center;
       font-size:14px;color:${meta.color};
-      box-shadow:0 0 8px ${meta.color}55;
-    ">${meta.icon}</div>`,
+      box-shadow:0 0 8px ${threatColor}55;
+    ">${meta.icon}${threatBadge}</div>`,
     iconSize: [32, 32],
     iconAnchor: [16, 16],
   });
@@ -181,6 +193,10 @@ export default function LiveMap() {
   const [showLayers, setShowLayers] = useState(false);
   const [facilities, setFacilities] = useState<any[]>([]);
   const [showFacilities, setShowFacilities] = useState(true);
+  const [zones, setZones] = useState<any[]>([]);
+  const [showZones, setShowZones] = useState(true);
+  const [routingFacilities, setRoutingFacilities] = useState<any[]>([]);
+  const [showRouting, setShowRouting] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
 
   const load = () => {
@@ -190,17 +206,44 @@ export default function LiveMap() {
       .finally(() => setLoading(false));
   };
 
-  const loadFacilities = () => {
+  const loadFacilities = useCallback(() => {
+    // Use cached data immediately for offline support
+    const cached = localStorage.getItem(FACILITY_CACHE_KEY);
+    if (cached && facilities.length === 0) {
+      try { setFacilities(JSON.parse(cached)); } catch { /* ignore */ }
+    }
     postsApi.mapPosts()
-      .then(({ data }) => setFacilities(data))
+      .then(({ data }) => {
+        setFacilities(data);
+        try { localStorage.setItem(FACILITY_CACHE_KEY, JSON.stringify(data)); } catch { /* ignore */ }
+      })
+      .catch(() => {
+        // Offline — use cache already set above
+      });
+  }, []);
+
+  const loadZones = useCallback(() => {
+    zonesApi.list()
+      .then(({ data }) => setZones(data))
       .catch(() => {});
+  }, []);
+
+  const toggleFacilityRouting = (f: any) => {
+    if (!showRouting) return;
+    setRoutingFacilities((prev) => {
+      if (prev.find((x) => x.id === f.id)) return prev.filter((x) => x.id !== f.id);
+      if (prev.length >= 2) return [prev[1], f];
+      return [...prev, f];
+    });
   };
 
   useEffect(() => {
     load();
     loadFacilities();
+    loadZones();
     const interval = setInterval(load, 10000);
     const facilityInterval = setInterval(loadFacilities, 60000);
+    const zoneInterval = setInterval(loadZones, 30000);
 
     const token = localStorage.getItem("access_token");
     if (token && user) {
@@ -221,8 +264,8 @@ export default function LiveMap() {
       };
     }
 
-    return () => { clearInterval(interval); clearInterval(facilityInterval); wsRef.current?.close(); };
-  }, [user]);
+    return () => { clearInterval(interval); clearInterval(facilityInterval); clearInterval(zoneInterval); wsRef.current?.close(); };
+  }, [user, loadFacilities, loadZones]);
 
   const statusCounts = Object.keys(STATUS_COLORS).map((s) => ({
     status: s,
@@ -255,8 +298,8 @@ export default function LiveMap() {
         </button>
       </div>
 
-      {/* ── Facilities toggle ── */}
-      <div style={{ position: "absolute", top: 12, right: 160, zIndex: 1000 }}>
+      {/* ── Toolbar buttons ── */}
+      <div style={{ position: "absolute", top: 12, right: 160, zIndex: 1000, display: "flex", gap: 4 }}>
         <button
           onClick={() => setShowFacilities((v) => !v)}
           title="Toggle facility markers"
@@ -271,6 +314,36 @@ export default function LiveMap() {
         >
           <MdDomain size={16} />
           {facilities.length} FACILITIES
+        </button>
+        <button
+          onClick={() => setShowZones((v) => !v)}
+          title="Toggle zone overlays"
+          style={{
+            background: showZones ? "#0c1f2e" : "#0a0a14",
+            border: `1px solid ${showZones ? "#3b82f6" : "#151520"}`,
+            color: showZones ? "#60a5fa" : "#4b5563",
+            padding: "7px 10px", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 6,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: 1,
+          }}
+        >
+          <MdCropFree size={16} />
+          {zones.length} ZONES
+        </button>
+        <button
+          onClick={() => { setShowRouting((v) => !v); if (showRouting) setRoutingFacilities([]); }}
+          title="Inter-facility routing"
+          style={{
+            background: showRouting ? "#1f0c0c" : "#0a0a0a",
+            border: `1px solid ${showRouting ? "#ef4444" : "#1a1a1a"}`,
+            color: showRouting ? "#f87171" : "#4b5563",
+            padding: "7px 10px", cursor: "pointer",
+            display: "flex", alignItems: "center", gap: 6,
+            fontFamily: "'JetBrains Mono', monospace", fontSize: 10, letterSpacing: 1,
+          }}
+        >
+          <MdAltRoute size={16} />
+          {showRouting ? (routingFacilities.length === 2 ? "ROUTE ACTIVE" : `SELECT ${2 - routingFacilities.length}`) : "ROUTING"}
         </button>
       </div>
 
@@ -357,9 +430,40 @@ export default function LiveMap() {
 
         <ZoomButtons />
 
+        {/* ── Zone overlays ── */}
+        {showZones && zones.map((z) => {
+          const pts = z.polygon_points?.points ?? [];
+          const opts = { color: z.color, fillColor: z.fill_color ?? z.color + "33", weight: 1.5, opacity: 0.8, fillOpacity: 0.15 };
+          if (z.is_circle && z.center_lat && z.center_lng && z.radius) {
+            return <Circle key={z.id} center={[z.center_lat, z.center_lng]} radius={z.radius} pathOptions={opts} />;
+          }
+          if (z.shape === "rectangle" && pts.length === 2) {
+            return <Rectangle key={z.id} bounds={[pts[0], pts[1]]} pathOptions={opts} />;
+          }
+          if (pts.length >= 3) {
+            return <Polygon key={z.id} positions={pts} pathOptions={opts} />;
+          }
+          return null;
+        })}
+
+        {/* ── Inter-facility routing line ── */}
+        {showRouting && routingFacilities.length === 2 && (
+          <Polyline
+            positions={routingFacilities.map((f) => [f.latitude, f.longitude] as [number, number])}
+            pathOptions={{ color: "#ef4444", weight: 3, dashArray: "10,6", opacity: 0.8 }}
+          />
+        )}
+
         {/* ── Facility markers ── */}
-        {showFacilities && facilities.map((f) => (
-          <Marker key={f.id} position={[f.latitude, f.longitude]} icon={makeFacilityIcon(f.facility_type)}>
+        {showFacilities && facilities.map((f) => {
+          const isRoutingSelected = routingFacilities.find((r) => r.id === f.id);
+          return (
+            <Marker
+              key={f.id}
+              position={[f.latitude, f.longitude]}
+              icon={makeFacilityIcon(f.facility_type, f.threat_level)}
+              eventHandlers={{ click: () => toggleFacilityRouting(f) }}
+            >
             <Popup className="drd-popup">
               <div style={{
                 background: "#040804", border: "1px solid #152015",
@@ -370,6 +474,15 @@ export default function LiveMap() {
                     {(FACILITY_META[f.facility_type] || FACILITY_META.other).icon}
                   </span>
                   <span style={{ color: "#d1fae5", fontSize: 12, fontWeight: 600 }}>{f.name}</span>
+                  {f.threat_level && f.threat_level !== "green" && (
+                    <span style={{
+                      marginLeft: "auto", fontSize: 8, padding: "2px 5px",
+                      background: THREAT_COLORS[f.threat_level] + "22",
+                      color: THREAT_COLORS[f.threat_level], letterSpacing: 1,
+                    }}>
+                      {f.threat_level.toUpperCase()}
+                    </span>
+                  )}
                 </div>
                 <p style={{ color: "#4b5563", fontSize: 10, margin: "2px 0" }}>
                   {f.facility_type.replace(/_/g, " ").toUpperCase()}
@@ -383,18 +496,34 @@ export default function LiveMap() {
                 <div style={{ marginTop: 6, color: "#1f4d1f", fontSize: 9, letterSpacing: 1 }}>
                   {f.latitude.toFixed(5)}, {f.longitude.toFixed(5)}
                 </div>
-                <div style={{
-                  marginTop: 6, display: "inline-block",
-                  background: f.status === "active" ? "#22c55e20" : "#6b728020",
-                  color: f.status === "active" ? "#22c55e" : "#6b7280",
-                  fontSize: 8, padding: "2px 6px", letterSpacing: 1,
-                }}>
-                  {f.status.toUpperCase()}
+                <div style={{ marginTop: 6, display: "flex", gap: 6, alignItems: "center" }}>
+                  <span style={{
+                    display: "inline-block",
+                    background: f.status === "active" ? "#22c55e20" : "#6b728020",
+                    color: f.status === "active" ? "#22c55e" : "#6b7280",
+                    fontSize: 8, padding: "2px 6px", letterSpacing: 1,
+                  }}>
+                    {f.status.toUpperCase()}
+                  </span>
+                  {showRouting && (
+                    <span style={{ fontSize: 8, color: isRoutingSelected ? "#ef4444" : "#4b5563", cursor: "pointer" }}>
+                      {isRoutingSelected ? "● ROUTING PT" : "Click to select for route"}
+                    </span>
+                  )}
                 </div>
+                {showRouting && routingFacilities.length === 2 && routingFacilities[0].id === f.id && (
+                  <div style={{ marginTop: 6, color: "#f87171", fontSize: 9 }}>
+                    Distance: ~{Math.round(
+                      L.latLng(routingFacilities[0].latitude, routingFacilities[0].longitude)
+                       .distanceTo(L.latLng(routingFacilities[1].latitude, routingFacilities[1].longitude)) / 1000
+                    )} km to {routingFacilities[1].name}
+                  </div>
+                )}
               </div>
             </Popup>
           </Marker>
-        ))}
+          );
+        })}
 
         {locations.map((loc) => {
           const isMe = loc.user_id === user?.id;

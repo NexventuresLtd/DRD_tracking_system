@@ -1,6 +1,106 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { MapContainer, TileLayer, Marker, useMapEvents } from "react-leaflet";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
+
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl: "",
+});
+
+function MapClickLayer({ onPick }: { onPick: (lat: number, lng: number) => void }) {
+  useMapEvents({ click: (e) => onPick(e.latlng.lat, e.latlng.lng) });
+  return null;
+}
+
+function MapPicker({ value, onChange }: {
+  value: { lat: string; lng: string };
+  onChange: (lat: string, lng: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [pin, setPin] = useState<[number, number] | null>(
+    value.lat && value.lng ? [parseFloat(value.lat), parseFloat(value.lng)] : null
+  );
+
+  const handlePick = (lat: number, lng: number) => {
+    setPin([lat, lng]);
+    onChange(lat.toFixed(6), lng.toFixed(6));
+  };
+
+  const handleConfirm = () => setOpen(false);
+
+  const center: [number, number] = pin ?? [-1.9441, 30.0619];
+
+  const hasValue = !!(value.lat && value.lng);
+
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        style={{
+          width: "100%", padding: "9px 12px",
+          background: "#040804", border: `1px solid ${hasValue ? "rgba(22,163,74,0.4)" : "#374151"}`,
+          color: hasValue ? "#22c55e" : "#6b7280",
+          borderRadius: 8, cursor: "pointer", fontSize: 13,
+          display: "flex", alignItems: "center", gap: 8, textAlign: "left",
+        }}
+      >
+        <span>📍</span>
+        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {hasValue ? `${parseFloat(value.lat).toFixed(5)}, ${parseFloat(value.lng).toFixed(5)}` : "Click to pick location on map"}
+        </span>
+        {hasValue && (
+          <span
+            onClick={(e) => { e.stopPropagation(); onChange("", ""); setPin(null); }}
+            style={{ color: "#6b7280", fontSize: 11, padding: "0 2px" }}
+          >✕</span>
+        )}
+      </button>
+
+      {open && (
+        <div style={{
+          position: "fixed", inset: 0, zIndex: 9999,
+          background: "rgba(0,0,0,0.85)",
+          display: "flex", flexDirection: "column",
+        }}>
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "12px 16px", background: "#060d06",
+            borderBottom: "1px solid #0a140a",
+          }}>
+            <div>
+              <div style={{ color: "#fff", fontWeight: 600, fontSize: 14 }}>Pick Location</div>
+              <div style={{ color: "#6b7280", fontSize: 12 }}>
+                {pin ? `${pin[0].toFixed(5)}, ${pin[1].toFixed(5)}` : "Tap anywhere on the map"}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setOpen(false)}
+                style={{ padding: "6px 14px", background: "#0a140a", border: "1px solid #374151", color: "#9ca3af", borderRadius: 8, cursor: "pointer", fontSize: 13 }}>
+                Cancel
+              </button>
+              <button onClick={handleConfirm} disabled={!pin}
+                style={{ padding: "6px 14px", background: pin ? "#16a34a" : "#374151", color: "#fff", border: "none", borderRadius: 8, cursor: pin ? "pointer" : "default", fontSize: 13, fontWeight: 600 }}>
+                Confirm
+              </button>
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <MapContainer center={center} zoom={pin ? 14 : 10} style={{ height: "100%", width: "100%" }}>
+              <TileLayer url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png" subdomains={["a","b","c"]} />
+              <MapClickLayer onPick={handlePick} />
+              {pin && <Marker position={pin} />}
+            </MapContainer>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 interface Evidence {
   id: string;
@@ -181,15 +281,12 @@ export default function EvidencePage() {
               className="w-full px-3 py-2 rounded-lg text-white text-sm resize-none"
               style={{ background: "#040804", border: "1px solid #374151" }} />
 
-            <div className="flex gap-2">
-              <input value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })}
-                placeholder="Latitude" type="number" step="any"
-                className="flex-1 px-3 py-2 rounded-lg text-white text-sm"
-                style={{ background: "#040804", border: "1px solid #374151" }} />
-              <input value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })}
-                placeholder="Longitude" type="number" step="any"
-                className="flex-1 px-3 py-2 rounded-lg text-white text-sm"
-                style={{ background: "#040804", border: "1px solid #374151" }} />
+            <div>
+              <p className="text-gray-500 text-xs mb-1.5">Location (optional)</p>
+              <MapPicker
+                value={{ lat: form.latitude, lng: form.longitude }}
+                onChange={(lat, lng) => setForm((f) => ({ ...f, latitude: lat, longitude: lng }))}
+              />
             </div>
 
             <div onClick={() => fileRef.current?.click()}
