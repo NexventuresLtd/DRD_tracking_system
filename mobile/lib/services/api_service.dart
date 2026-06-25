@@ -63,18 +63,20 @@ class ApiService {
     return false;
   }
 
+  static const _kTimeout = Duration(seconds: 10);
+
   Future<Map<String, dynamic>> post(String path, Map<String, dynamic> body) async {
     final res = await http.post(
       Uri.parse('$_base$path'),
       headers: _headers(),
       body: jsonEncode(body),
-    );
+    ).timeout(_kTimeout);
     return _handleResponse(res);
   }
 
   Future<dynamic> get(String path, {Map<String, String>? params}) async {
     final uri = Uri.parse('$_base$path').replace(queryParameters: params);
-    final res = await http.get(uri, headers: _headers());
+    final res = await http.get(uri, headers: _headers()).timeout(_kTimeout);
     if (res.statusCode == 401) {
       final refreshed = await _tryRefresh();
       if (!refreshed) throw ApiException(401, 'Unauthorized');
@@ -91,12 +93,12 @@ class ApiService {
       Uri.parse('$_base$path'),
       headers: _headers(),
       body: jsonEncode(body),
-    );
+    ).timeout(_kTimeout);
     return _handleResponse(res);
   }
 
   Future<Map<String, dynamic>> delete(String path) async {
-    final res = await http.delete(Uri.parse('$_base$path'), headers: _headers());
+    final res = await http.delete(Uri.parse('$_base$path'), headers: _headers()).timeout(_kTimeout);
     return _handleResponse(res);
   }
 

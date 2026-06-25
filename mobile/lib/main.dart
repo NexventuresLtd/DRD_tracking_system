@@ -10,6 +10,7 @@ import 'providers/message_provider.dart';
 import 'providers/zone_provider.dart';
 import 'services/storage_service.dart';
 import 'services/push_notification_service.dart';
+import 'services/offline_queue_service.dart';
 import 'providers/connectivity_provider.dart';
 import 'providers/mesh_provider.dart';
 
@@ -23,6 +24,7 @@ void main() async {
   EnvironmentConfig.init();
 
   await StorageService().init();
+  await OfflineQueueService().init();
   await PushNotificationService.instance.initialize();
 
   runApp(

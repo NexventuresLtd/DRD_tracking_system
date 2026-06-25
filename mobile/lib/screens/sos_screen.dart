@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../providers/connectivity_provider.dart';
 import '../providers/location_provider.dart';
 import '../services/api_service.dart';
+import '../services/ble_service.dart';
 
 class SOSScreen extends StatefulWidget {
   const SOSScreen({super.key});
@@ -54,12 +56,19 @@ class _SOSScreenState extends State<SOSScreen> with SingleTickerProviderStateMix
     _timer?.cancel();
     setState(() { _sending = true; _confirming = false; });
     final loc = context.read<LocationProvider>().current;
+    final conn = context.read<ConnectivityProvider>();
+    final payload = <String, dynamic>{
+      if (loc != null) 'latitude': loc.lat,
+      if (loc != null) 'longitude': loc.lng,
+      if (_message.isNotEmpty) 'message': _message,
+    };
     try {
-      await ApiService().post('/sos', {
-        if (loc != null) 'latitude': loc.lat,
-        if (loc != null) 'longitude': loc.lng,
-        if (_message.isNotEmpty) 'message': _message,
-      });
+      if (conn.isBleOnly) {
+        // No internet — route SOS through BLE bridge to reach the server
+        await BleService.instance.broadcast({'type': 'sos', ...payload});
+      } else {
+        await ApiService().post('/sos', payload);
+      }
       if (mounted) setState(() { _sent = true; _sending = false; });
       await Future.delayed(const Duration(seconds: 3));
       if (mounted) setState(() => _sent = false);

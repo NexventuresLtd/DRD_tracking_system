@@ -1,13 +1,16 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../providers/mesh_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/mesh_service.dart';
 import '../services/ble_service.dart';
+import '../services/permission_service.dart';
 
-/// Full-screen overlay shown when internet is unavailable.
+/// Full-screen overlay shown when the device is fully isolated (no path to server).
 /// Shows both WiFi LAN mesh peers (green) and BLE peers (blue).
+/// The user can dismiss it to continue using the app in offline/queued mode.
 class MeshNetworkOverlay extends StatefulWidget {
   const MeshNetworkOverlay({super.key});
 
@@ -18,6 +21,9 @@ class MeshNetworkOverlay extends StatefulWidget {
 class _MeshNetworkOverlayState extends State<MeshNetworkOverlay>
     with SingleTickerProviderStateMixin {
   late AnimationController _pulse;
+  bool _dismissed = false;
+
+  void _dismiss() => setState(() => _dismissed = true);
 
   @override
   void initState() {
@@ -44,6 +50,41 @@ class _MeshNetworkOverlayState extends State<MeshNetworkOverlay>
   Widget build(BuildContext context) {
     final mesh = context.watch<MeshProvider>();
 
+    // User chose to continue in offline/queued mode — show only a warning banner
+    if (_dismissed) {
+      return Material(
+        color: Colors.transparent,
+        child: SafeArea(
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Container(
+              margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: const Color(0xFF1A0A0A),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.5)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.wifi_off, color: Color(0xFFEF4444), size: 14),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'ISOLATED — data queuing locally',
+                    style: TextStyle(color: Color(0xFFFCA5A5), fontSize: 11, fontFamily: 'monospace'),
+                  ),
+                ),
+                GestureDetector(
+                  onTap: () => setState(() => _dismissed = false),
+                  child: const Icon(Icons.fullscreen, color: Color(0xFF6B7280), size: 16),
+                ),
+              ]),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Material(
       color: const Color(0xFF030712),
       child: Stack(
@@ -59,35 +100,52 @@ class _MeshNetworkOverlayState extends State<MeshNetworkOverlay>
                   bleAdapterOn: mesh.bleAdapterOn,
                 ),
 
+                // Scrollable body — node graph + permissions + device list + stats
                 Expanded(
-                  child: Center(
-                    child: _NodeGraph(
-                      pulse: _pulse,
-                      wifiPeers: mesh.peers,
-                      blePeers: mesh.blePeers,
+                  child: SingleChildScrollView(
+                    padding: const EdgeInsets.only(bottom: 8),
+                    child: Column(
+                      children: [
+                        // Node visualisation
+                        SizedBox(
+                          height: 200,
+                          child: Center(
+                            child: _NodeGraph(
+                              pulse: _pulse,
+                              wifiPeers: mesh.peers,
+                              blePeers: mesh.blePeers,
+                            ),
+                          ),
+                        ),
+
+                        // Bluetooth permission check + grant
+                        const _BlePermSection(),
+
+                        // All nearby BLE devices with connect / pair
+                        _DeviceList(peers: mesh.blePeers),
+
+                        // BLE discovery stats bar
+                        _BleBar(
+                          adapterOn: mesh.bleAdapterOn,
+                          nearby: mesh.bleNearby,
+                          drd: mesh.bleDrd,
+                          connected: mesh.bleConnected,
+                        ),
+
+                        _StatsRow(
+                          peerCount: mesh.peerCount,
+                          msgRelayed: mesh.msgRelayed,
+                          active: mesh.active,
+                          bleDrd: mesh.bleDrd,
+                        ),
+
+                        _EventLog(entries: mesh.log),
+                      ],
                     ),
                   ),
                 ),
 
-                // BLE discovery bar — always visible
-                _BleBar(
-                  adapterOn: mesh.bleAdapterOn,
-                  nearby: mesh.bleNearby,
-                  drd: mesh.bleDrd,
-                  connected: mesh.bleConnected,
-                ),
-
-                _StatsRow(
-                  peerCount: mesh.peerCount,
-                  msgRelayed: mesh.msgRelayed,
-                  active: mesh.active,
-                  bleDrd: mesh.bleDrd,
-                ),
-
-                _EventLog(entries: mesh.log),
-
-                _ActionBar(mesh: mesh),
-
+                _ActionBar(mesh: mesh, onDismiss: _dismiss),
                 const SizedBox(height: 12),
               ],
             ),
@@ -582,42 +640,54 @@ class _EventLog extends StatelessWidget {
 
 class _ActionBar extends StatelessWidget {
   final MeshProvider mesh;
-  const _ActionBar({required this.mesh});
+  final VoidCallback onDismiss;
+  const _ActionBar({required this.mesh, required this.onDismiss});
 
   @override
   Widget build(BuildContext context) {
     final userName = context.read<AuthProvider>().user?.username;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: Row(
+      child: Column(
         children: [
-          Expanded(
-            child: _MeshButton(
-              label: mesh.active ? 'STOP MESH' : 'START MESH',
-              icon: mesh.active ? Icons.stop_circle_outlined : Icons.wifi_tethering,
-              color: mesh.active ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
-              onTap: () => mesh.active ? mesh.stop() : mesh.start(userName: userName),
-            ),
+          Row(
+            children: [
+              Expanded(
+                child: _MeshButton(
+                  label: mesh.active ? 'STOP MESH' : 'START MESH',
+                  icon: mesh.active ? Icons.stop_circle_outlined : Icons.wifi_tethering,
+                  color: mesh.active ? const Color(0xFFDC2626) : const Color(0xFF16A34A),
+                  onTap: () => mesh.active ? mesh.stop() : mesh.start(userName: userName),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _MeshButton(
+                  label: 'BROADCAST LOC',
+                  icon: Icons.my_location,
+                  color: const Color(0xFF0EA5E9),
+                  onTap: mesh.active && mesh.anyPeer
+                      ? () => mesh.sendLocation({'status': 'active'})
+                      : null,
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _MeshButton(
+                  label: 'SYNC SERVER',
+                  icon: Icons.sync,
+                  color: const Color(0xFF8B5CF6),
+                  onTap: () => mesh.flushToServer(),
+                ),
+              ),
+            ],
           ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _MeshButton(
-              label: 'BROADCAST LOC',
-              icon: Icons.my_location,
-              color: const Color(0xFF0EA5E9),
-              onTap: mesh.active && mesh.anyPeer
-                  ? () => mesh.sendLocation({'status': 'active'})
-                  : null,
-            ),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: _MeshButton(
-              label: 'SYNC SERVER',
-              icon: Icons.sync,
-              color: const Color(0xFF8B5CF6),
-              onTap: () => mesh.flushToServer(),
-            ),
+          const SizedBox(height: 8),
+          _MeshButton(
+            label: 'CONTINUE IN OFFLINE MODE  ▸',
+            icon: Icons.arrow_forward,
+            color: const Color(0xFF6B7280),
+            onTap: onDismiss,
           ),
         ],
       ),
@@ -661,6 +731,346 @@ class _MeshButton extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+// ── Bluetooth permission section ──────────────────────────────────────────────
+
+class _BlePermSection extends StatefulWidget {
+  const _BlePermSection();
+
+  @override
+  State<_BlePermSection> createState() => _BlePermSectionState();
+}
+
+class _BlePermSectionState extends State<_BlePermSection> {
+  final _svc = PermissionService.instance;
+
+  Map<Permission, PermissionStatus> _statuses = {};
+  bool _loading = false;
+
+  static const _blePerms = [
+    Permission.bluetoothScan,
+    Permission.bluetoothConnect,
+    Permission.bluetoothAdvertise,
+  ];
+
+  static final _labels = {
+    Permission.bluetoothScan:      'SCAN',
+    Permission.bluetoothConnect:   'CONNECT',
+    Permission.bluetoothAdvertise: 'ADVERTISE',
+  };
+
+  @override
+  void initState() {
+    super.initState();
+    _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final map = <Permission, PermissionStatus>{};
+    for (final p in _blePerms) {
+      map[p] = await p.status;
+    }
+    if (mounted) setState(() => _statuses = map);
+  }
+
+  bool get _allGranted => _blePerms.every((p) =>
+      _statuses[p]?.isGranted == true || _statuses[p]?.isLimited == true);
+
+  Future<void> _grantAll() async {
+    setState(() => _loading = true);
+    await _svc.requestAll();
+    await _refresh();
+    setState(() => _loading = false);
+  }
+
+  Future<void> _grantOne(Permission p) async {
+    await _svc.requestOne(p);
+    await _refresh();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF050D1A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(
+          color: _allGranted
+              ? const Color(0xFF1D3A6A)
+              : const Color(0xFF7F1D1D).withValues(alpha: 0.7),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            Icon(
+              _allGranted ? Icons.bluetooth : Icons.bluetooth_disabled,
+              color: _allGranted ? const Color(0xFF60A5FA) : const Color(0xFFEF4444),
+              size: 14,
+            ),
+            const SizedBox(width: 6),
+            Text(
+              'BLUETOOTH PERMISSIONS',
+              style: TextStyle(
+                color: _allGranted ? const Color(0xFF93C5FD) : const Color(0xFFFCA5A5),
+                fontSize: 9,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 2,
+                fontFamily: 'monospace',
+              ),
+            ),
+            const Spacer(),
+            if (!_allGranted)
+              GestureDetector(
+                onTap: _loading ? null : _grantAll,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1D4ED8).withValues(alpha: 0.2),
+                    borderRadius: BorderRadius.circular(6),
+                    border: Border.all(color: const Color(0xFF1D4ED8)),
+                  ),
+                  child: _loading
+                      ? const SizedBox(width: 10, height: 10,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: Color(0xFF60A5FA)))
+                      : const Text('GRANT ALL',
+                          style: TextStyle(color: Color(0xFF60A5FA), fontSize: 9,
+                              fontWeight: FontWeight.w700, letterSpacing: 1)),
+                ),
+              ),
+          ]),
+          const SizedBox(height: 10),
+          Row(
+            children: _blePerms.map((p) {
+              final granted = _statuses[p]?.isGranted == true ||
+                              _statuses[p]?.isLimited == true;
+              final denied  = _statuses[p]?.isPermanentlyDenied == true;
+              final label   = _labels[p] ?? p.toString();
+              final color   = granted
+                  ? const Color(0xFF22C55E)
+                  : denied ? const Color(0xFFEF4444) : const Color(0xFFF59E0B);
+
+              return Expanded(
+                child: GestureDetector(
+                  onTap: granted ? null : () => denied
+                      ? _svc.openSettings()
+                      : _grantOne(p),
+                  child: Container(
+                    margin: const EdgeInsets.only(right: 6),
+                    padding: const EdgeInsets.symmetric(vertical: 7),
+                    decoration: BoxDecoration(
+                      color: color.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: color.withValues(alpha: 0.3)),
+                    ),
+                    child: Column(children: [
+                      Icon(
+                        granted ? Icons.check_circle : (denied ? Icons.block : Icons.radio_button_unchecked),
+                        color: color, size: 16,
+                      ),
+                      const SizedBox(height: 3),
+                      Text(label,
+                          style: TextStyle(color: color, fontSize: 7,
+                              fontWeight: FontWeight.w700, letterSpacing: 0.8,
+                              fontFamily: 'monospace')),
+                      if (!granted) ...[
+                        const SizedBox(height: 2),
+                        Text(denied ? 'SETTINGS' : 'TAP',
+                            style: TextStyle(color: color.withValues(alpha: 0.6),
+                                fontSize: 6, letterSpacing: 0.5)),
+                      ],
+                    ]),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── BLE device list (scan, pair, connect) ─────────────────────────────────────
+
+class _DeviceList extends StatelessWidget {
+  final List<BlePeer> peers;
+  const _DeviceList({required this.peers});
+
+  @override
+  Widget build(BuildContext context) {
+    // Combine BleService allPeers (includes non-DRD) with connected status
+    final allPeers = BleService.instance.allPeers;
+
+    // Sort: bridge first, then connected DRD, then other DRD, then others
+    final sorted = [...allPeers]..sort((a, b) {
+      int score(BlePeer p) {
+        if (p.name.startsWith('DRD-BRIDGE')) return 0;
+        if (p.connected && p.isDrd)          return 1;
+        if (p.isDrd)                         return 2;
+        return 3;
+      }
+      return score(a).compareTo(score(b));
+    });
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF050D1A),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFF1D3A6A)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+            child: Row(children: [
+              const Icon(Icons.bluetooth_searching, color: Color(0xFF60A5FA), size: 13),
+              const SizedBox(width: 6),
+              const Text('NEARBY DEVICES',
+                  style: TextStyle(color: Color(0xFF93C5FD), fontSize: 9,
+                      fontWeight: FontWeight.w800, letterSpacing: 2,
+                      fontFamily: 'monospace')),
+              const Spacer(),
+              Text('${allPeers.length} found',
+                  style: const TextStyle(color: Color(0xFF374151), fontSize: 9)),
+            ]),
+          ),
+
+          if (sorted.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(12, 4, 12, 12),
+              child: Text('Scanning for devices…',
+                  style: TextStyle(color: Color(0xFF374151), fontSize: 11)),
+            )
+          else
+            ...sorted.map((peer) => _DeviceTile(peer: peer)),
+        ],
+      ),
+    );
+  }
+}
+
+class _DeviceTile extends StatelessWidget {
+  final BlePeer peer;
+  const _DeviceTile({required this.peer});
+
+  bool get _isBridge => peer.name.startsWith('DRD-BRIDGE');
+
+  @override
+  Widget build(BuildContext context) {
+    final Color borderColor;
+    final Color iconColor;
+    final IconData icon;
+
+    if (_isBridge) {
+      borderColor = const Color(0xFF1D4ED8);
+      iconColor   = const Color(0xFF60A5FA);
+      icon        = Icons.computer;
+    } else if (peer.isDrd) {
+      borderColor = const Color(0xFF166534);
+      iconColor   = const Color(0xFF22C55E);
+      icon        = Icons.smartphone;
+    } else {
+      borderColor = const Color(0xFF1F2937);
+      iconColor   = const Color(0xFF374151);
+      icon        = Icons.bluetooth;
+    }
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(10, 0, 10, 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      decoration: BoxDecoration(
+        color: borderColor.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor.withValues(alpha: 0.4)),
+      ),
+      child: Row(children: [
+        // Device icon
+        Container(
+          width: 34, height: 34,
+          decoration: BoxDecoration(
+            color: iconColor.withValues(alpha: 0.1),
+            borderRadius: BorderRadius.circular(8),
+          ),
+          child: Icon(icon, color: iconColor, size: 16),
+        ),
+        const SizedBox(width: 10),
+
+        // Name + RSSI
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Flexible(
+                  child: Text(peer.name,
+                      style: TextStyle(color: peer.isDrd ? Colors.white : const Color(0xFF6B7280),
+                          fontSize: 12, fontWeight: FontWeight.w600),
+                      overflow: TextOverflow.ellipsis),
+                ),
+                if (_isBridge) ...[
+                  const SizedBox(width: 4),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1D4ED8).withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: const Color(0xFF1D4ED8)),
+                    ),
+                    child: const Text('BRIDGE',
+                        style: TextStyle(color: Color(0xFF60A5FA), fontSize: 7,
+                            fontWeight: FontWeight.w800, letterSpacing: 1)),
+                  ),
+                ],
+              ]),
+              const SizedBox(height: 2),
+              Text('${peer.rssi} dBm',
+                  style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10)),
+            ],
+          ),
+        ),
+
+        // Connection status / button
+        if (peer.connected)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+            decoration: BoxDecoration(
+              color: const Color(0xFF166534).withValues(alpha: 0.2),
+              borderRadius: BorderRadius.circular(6),
+              border: Border.all(color: const Color(0xFF166534)),
+            ),
+            child: const Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.check, color: Color(0xFF22C55E), size: 10),
+              SizedBox(width: 3),
+              Text('PAIRED', style: TextStyle(color: Color(0xFF22C55E),
+                  fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+            ]),
+          )
+        else if (peer.isDrd)
+          GestureDetector(
+            onTap: () => BleService.instance.connectTo(peer.deviceId),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+              decoration: BoxDecoration(
+                color: iconColor.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(6),
+                border: Border.all(color: iconColor.withValues(alpha: 0.5)),
+              ),
+              child: Text('CONNECT',
+                  style: TextStyle(color: iconColor, fontSize: 9,
+                      fontWeight: FontWeight.w700, letterSpacing: 0.8)),
+            ),
+          ),
+      ]),
     );
   }
 }

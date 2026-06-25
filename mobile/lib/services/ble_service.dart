@@ -53,10 +53,21 @@ class BleService {
   bool _adapterOn = false;
   bool get adapterOn => _adapterOn;
 
-  final Map<String, BlePeer> _seen       = {};
-  final Map<String, BluetoothDevice> _gatt = {};
-  final Set<String> _connecting           = {};
-  final Map<String, StringBuffer> _rxBuf  = {};
+  // User JWT — set after login so the bridge can call API as the real user
+  String? _userToken;
+  void setUserToken(String? token) => _userToken = token;
+
+  final Map<String, BlePeer>        _seen      = {};
+  final Map<String, BluetoothDevice>           _gatt    = {};
+  final Map<String, BluetoothDevice>           _devices = {};
+  final Set<String>                            _connecting = {};
+  final Map<String, StringBuffer>              _rxBuf   = {};
+  // Cached writable RX characteristics — avoids re-discovering services on every send
+  final Map<String, BluetoothCharacteristic>   _rxChars = {};
+  // One connection-state subscription per device — prevents duplicate listeners
+  final Map<String, StreamSubscription>        _connStateSubs = {};
+  // Per-device reconnect timers for bridge auto-recovery
+  final Map<String, Timer>                     _reconnectTimers = {};
 
   Timer? _scanCycle;
   StreamSubscription<List<ScanResult>>? _scanSub;
@@ -71,6 +82,12 @@ class BleService {
   int get nearbyCount         => _seen.length;
   int get drdCount            => _seen.values.where((p) => p.isDrd).length;
   int get connectedCount      => _gatt.length;
+
+  /// True when the laptop DRD-BRIDGE is among the GATT-connected devices.
+  bool get bridgeConnected => _gatt.keys.any((id) {
+    final peer = _seen[id];
+    return peer != null && peer.name.startsWith('DRD-BRIDGE');
+  });
 
   void addMessageListener(BleMsgCallback cb)    => _msgListeners.add(cb);
   void removeMessageListener(BleMsgCallback cb) => _msgListeners.remove(cb);
@@ -120,13 +137,20 @@ class BleService {
     try { await FlutterBluePlus.stopScan(); } catch (_) {}
     await _stopAdvertising();
 
+    for (final sub in _connStateSubs.values) { sub.cancel(); }
+    _connStateSubs.clear();
+    for (final t in _reconnectTimers.values) { t.cancel(); }
+    _reconnectTimers.clear();
+
     for (final dev in List<BluetoothDevice>.from(_gatt.values)) {
       try { await dev.disconnect(); } catch (_) {}
     }
     _gatt.clear();
     _seen.clear();
+    _devices.clear();
     _connecting.clear();
     _rxBuf.clear();
+    _rxChars.clear();
     _notifyState();
     debugPrint('[BLE] Stopped');
   }
@@ -197,6 +221,8 @@ class BleService {
             (g) => g.str128.toLowerCase() == _kServiceUuid,
           );
 
+      _devices[id] = r.device; // store for manual connect
+
       final existing = _seen[id];
       if (existing == null) {
         _seen[id] = BlePeer(
@@ -249,14 +275,39 @@ class BleService {
       _notifyState();
       debugPrint('[BLE] GATT connected: $id');
 
-      device.connectionState.listen((state) {
+      final isBridge = (peer?.name ?? '').startsWith('DRD-BRIDGE');
+
+      if (isBridge) {
+        // Give the GATT connection full radio time — scanning and GATT compete
+        // for the same radio on Android, causing the on/off behaviour.
+        _pauseScan();
+        // High priority = 7.5-15 ms connection interval instead of 30-50 ms
+        try {
+          await device.requestConnectionPriority(
+            connectionPriorityRequest: ConnectionPriority.high,
+          );
+        } catch (_) {}
+      }
+
+      // Cancel any stale listener before attaching a new one (prevents duplicates)
+      await _connStateSubs[id]?.cancel();
+      _connStateSubs[id] = device.connectionState.listen((state) {
         if (state == BluetoothConnectionState.disconnected) {
+          _connStateSubs.remove(id);
           _gatt.remove(id);
           _rxBuf.remove(id);
+          _rxChars.remove(id);
           final p = _seen[id];
           if (p != null) p.connected = false;
           _notifyState();
           debugPrint('[BLE] GATT disconnected: $id');
+
+          if (isBridge) {
+            // Resume scanning so the UI reflects the offline state
+            _resumeScan();
+            // Attempt immediate reconnect; scan will also find it when it's back
+            _scheduleReconnect(id);
+          }
         }
       });
 
@@ -266,6 +317,40 @@ class BleService {
     } finally {
       _connecting.remove(id);
     }
+  }
+
+  void _pauseScan() {
+    _scanCycle?.cancel();
+    _scanCycle = null;
+    try { FlutterBluePlus.stopScan(); } catch (_) {}
+    _scanSub?.cancel();
+    _scanSub = null;
+    debugPrint('[BLE] Scan paused — bridge GATT active');
+  }
+
+  void _resumeScan() {
+    if (_running && _adapterOn) _startScanCycle();
+    debugPrint('[BLE] Scan resumed — searching for bridge');
+  }
+
+  void _scheduleReconnect(String deviceId) {
+    _reconnectTimers[deviceId]?.cancel();
+    var attempt = 0;
+    void tryConnect() {
+      if (!_running || _gatt.containsKey(deviceId)) return;
+      final dev = _devices[deviceId];
+      if (dev == null) return;
+      attempt++;
+      debugPrint('[BLE] Reconnect attempt $attempt for $deviceId');
+      _connectGatt(dev).then((_) {
+        if (!_gatt.containsKey(deviceId) && attempt < 5) {
+          // Back-off: 2 s, 4 s, 8 s, 16 s, 30 s
+          final delay = Duration(seconds: (2 * (1 << (attempt - 1))).clamp(2, 30));
+          _reconnectTimers[deviceId] = Timer(delay, tryConnect);
+        }
+      });
+    }
+    _reconnectTimers[deviceId] = Timer(const Duration(seconds: 2), tryConnect);
   }
 
   Future<void> _subscribeNotify(BluetoothDevice device) async {
@@ -290,6 +375,15 @@ class BleService {
         await txChar.setNotifyValue(true);
         txChar.lastValueStream.listen((data) => _onRxBytes(id, data));
         debugPrint('[BLE] Subscribed to DRD TX notifications on $id');
+      }
+
+      // Cache the writable RX characteristic so sendTo() can skip re-discovery
+      final rxChar = svc.characteristics.where(
+        (c) => c.characteristicUuid.str128.toLowerCase() == _kRxCharUuid,
+      ).firstOrNull;
+      if (rxChar != null) {
+        _rxChars[id] = rxChar;
+        debugPrint('[BLE] RX char cached for $id');
       }
     } catch (e) {
       debugPrint('[BLE] GATT discovery error $id: $e');
@@ -317,23 +411,42 @@ class BleService {
     }
   }
 
+  // ── Manual connect (called from UI) ──────────────────
+
+  Future<void> connectTo(String deviceId) async {
+    final device = _devices[deviceId];
+    if (device == null) return;
+    await _connectGatt(device);
+  }
+
   // ── Send ─────────────────────────────────────────────────────────────────
 
   Future<void> sendTo(String deviceId, Map<String, dynamic> json) async {
     final device = _gatt[deviceId];
     if (device == null) return;
+
+    // Use cached characteristic; fall back to discovery only if not yet cached
+    BluetoothCharacteristic? rxChar = _rxChars[deviceId];
+    if (rxChar == null) {
+      try {
+        final services = await device.discoverServices();
+        final svc = services.where(
+          (s) => s.serviceUuid.str128.toLowerCase() == _kServiceUuid,
+        ).firstOrNull;
+        if (svc == null) return;
+        rxChar = svc.characteristics.where(
+          (c) => c.characteristicUuid.str128.toLowerCase() == _kRxCharUuid,
+        ).firstOrNull;
+        if (rxChar != null) _rxChars[deviceId] = rxChar;
+      } catch (e) {
+        debugPrint('[BLE] Service discovery failed $deviceId: $e');
+        return;
+      }
+    }
+
+    if (rxChar == null) return;
+
     try {
-      final services = await device.discoverServices();
-      final svc = services.where(
-        (s) => s.serviceUuid.str128.toLowerCase() == _kServiceUuid,
-      ).firstOrNull;
-      if (svc == null) return;
-
-      final rxChar = svc.characteristics.where(
-        (c) => c.characteristicUuid.str128.toLowerCase() == _kRxCharUuid,
-      ).firstOrNull;
-      if (rxChar == null) return;
-
       final bytes = utf8.encode('${jsonEncode(json)}\n');
       const chunk = 512;
       for (int i = 0; i < bytes.length; i += chunk) {
@@ -344,13 +457,19 @@ class BleService {
         );
       }
     } catch (e) {
+      // Characteristic may be stale after reconnect — clear cache so it's re-fetched
+      _rxChars.remove(deviceId);
       debugPrint('[BLE] Send error $deviceId: $e');
     }
   }
 
   Future<void> broadcast(Map<String, dynamic> json) async {
+    // Attach the user's JWT so the bridge can call API as the real user
+    final payload = _userToken != null
+        ? {...json, 'token': _userToken}
+        : json;
     for (final id in List<String>.from(_gatt.keys)) {
-      await sendTo(id, json);
+      await sendTo(id, payload);
     }
   }
 

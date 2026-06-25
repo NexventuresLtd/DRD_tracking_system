@@ -1,5 +1,16 @@
-// Edit mobile/.env then run ./run.sh to change the server IP.
-// Or: flutter run --dart-define=API_BASE_URL=http://YOUR_IP:8000
+// HOW TO SET SERVER IP
+// ─────────────────────────────────────────────────────────────────────────────
+// Option A — PC hotspot demo (laptop IS the server):
+//   Windows hotspot default gateway: 192.168.137.1
+//   flutter run --dart-define=API_BASE_URL=http://192.168.137.1:8000 \
+//               --dart-define=WS_BASE_URL=ws://192.168.137.1:8000
+//
+// Option B — Regular WiFi (server on same network):
+//   flutter run --dart-define=API_BASE_URL=http://YOUR_LAPTOP_IP:8000 \
+//               --dart-define=WS_BASE_URL=ws://YOUR_LAPTOP_IP:8000
+//
+// Option C — Edit the defaultValue below and rebuild.
+// ─────────────────────────────────────────────────────────────────────────────
 class EnvironmentConfig {
   static late String _apiBaseUrl;
   static late String _wsBaseUrl;
@@ -9,7 +20,7 @@ class EnvironmentConfig {
     _env = const String.fromEnvironment('ENV', defaultValue: 'development');
     _apiBaseUrl = const String.fromEnvironment(
       'API_BASE_URL',
-      defaultValue: 'http://192.168.1.73:8000',
+      defaultValue: 'http://192.168.1.73:8000', // Windows hotspot default
     );
     _wsBaseUrl = const String.fromEnvironment(
       'WS_BASE_URL',

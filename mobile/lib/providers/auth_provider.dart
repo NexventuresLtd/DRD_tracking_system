@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
 import '../services/storage_service.dart';
+import '../services/ble_service.dart';
 
 enum AuthStatus { unknown, authenticated, unauthenticated }
 
@@ -30,6 +31,7 @@ class AuthProvider extends ChangeNotifier {
       try {
         _user = User.fromJson(jsonDecode(userJson) as Map<String, dynamic>);
         _status = AuthStatus.authenticated;
+        BleService.instance.setUserToken(token);
         notifyListeners();
         await _refreshMe();
       } catch (_) {
@@ -76,11 +78,13 @@ class AuthProvider extends ChangeNotifier {
         'otp_code': otpCode,
       });
       _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      final accessToken = data['access_token'] as String;
       await _storage.saveAuth(
-        accessToken: data['access_token'] as String,
+        accessToken: accessToken,
         refreshToken: data['refresh_token'] as String,
         userJson: jsonEncode(_user!.toJson()),
       );
+      BleService.instance.setUserToken(accessToken);
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;
@@ -103,11 +107,13 @@ class AuthProvider extends ChangeNotifier {
     try {
       final data = await _api.post('/auth/login', {'email': email, 'password': password});
       _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      final accessToken = data['access_token'] as String;
       await _storage.saveAuth(
-        accessToken: data['access_token'] as String,
+        accessToken: accessToken,
         refreshToken: data['refresh_token'] as String,
         userJson: jsonEncode(_user!.toJson()),
       );
+      BleService.instance.setUserToken(accessToken);
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;
@@ -136,11 +142,13 @@ class AuthProvider extends ChangeNotifier {
         'password': password,
       });
       _user = User.fromJson(data['user'] as Map<String, dynamic>);
+      final accessToken = data['access_token'] as String;
       await _storage.saveAuth(
-        accessToken: data['access_token'] as String,
+        accessToken: accessToken,
         refreshToken: data['refresh_token'] as String,
         userJson: jsonEncode(_user!.toJson()),
       );
+      BleService.instance.setUserToken(accessToken);
       _status = AuthStatus.authenticated;
       notifyListeners();
       return true;
@@ -172,6 +180,7 @@ class AuthProvider extends ChangeNotifier {
       _api.post('/auth/logout', {'refresh_token': refresh}).catchError((_) => <String, dynamic>{});
     }
     await _storage.clearAuth();
+    BleService.instance.setUserToken(null);
     _user = null;
     _status = AuthStatus.unauthenticated;
     notifyListeners();

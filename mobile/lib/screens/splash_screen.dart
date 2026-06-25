@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/connectivity_provider.dart';
 import '../services/permission_service.dart';
 
 class SplashScreen extends StatefulWidget {
@@ -24,16 +25,24 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   }
 
   Future<void> _checkAuth() async {
-    await Future.delayed(const Duration(seconds: 2));
+    // Run delay, permission check, and connectivity probe in parallel so
+    // ConnectivityProvider has the accurate offline/online state the instant
+    // we navigate — the builder then shows MeshNetworkOverlay immediately.
+    final delayFuture       = Future<void>.delayed(const Duration(seconds: 2));
+    final permFuture        = PermissionService.instance.allCriticalGranted();
+    final connFuture        = context.read<ConnectivityProvider>().forceCheck();
+
+    await delayFuture;
+    final permissionsOk = await permFuture;
+    await connFuture;
+
     if (!mounted) return;
 
     final auth = context.read<AuthProvider>();
-    final permissionsOk = await PermissionService.instance.allCriticalGranted();
-
-    if (!mounted) return;
 
     if (auth.status == AuthStatus.authenticated) {
-      // Authenticated but missing permissions → show permission screen
+      // Connectivity state is now accurate — the builder will immediately
+      // show MeshNetworkOverlay on top of /home if the device is offline.
       Navigator.pushReplacementNamed(context, permissionsOk ? '/home' : '/permissions');
     } else {
       Navigator.pushReplacementNamed(context, '/login');

@@ -5,6 +5,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:permission_handler/permission_handler.dart' as ph;
 import '../services/api_service.dart';
+import '../services/ble_service.dart';
 
 class LocationData {
   final double lat;
@@ -140,12 +141,28 @@ class LocationProvider extends ChangeNotifier {
     return const LocationSettings(accuracy: LocationAccuracy.high, distanceFilter: 5);
   }
 
-  // Throttled to once per 5 seconds AND only when online
+  // Throttled to once per 5 seconds; falls back to BLE bridge when no internet
   Future<void> _sendToServer(Position pos) async {
-    if (!_online) return;
-
     final now = DateTime.now();
     if (_lastSent != null && now.difference(_lastSent!).inSeconds < 5) return;
+
+    final payload = {
+      'latitude': pos.latitude,
+      'longitude': pos.longitude,
+      'altitude': pos.altitude,
+      'heading': pos.heading,
+      'speed': pos.speed,
+      'accuracy': pos.accuracy,
+    };
+
+    // BLE bridge path: no internet but bridge is connected
+    if (!_online && BleService.instance.bridgeConnected) {
+      _lastSent = now;
+      await BleService.instance.broadcast({'type': 'location', ...payload});
+      return;
+    }
+
+    if (!_online) return;
 
     // Double-check connectivity right before the call
     final conn = await Connectivity().checkConnectivity();
@@ -157,14 +174,7 @@ class LocationProvider extends ChangeNotifier {
 
     _lastSent = now;
     try {
-      await _api.post('/locations', {
-        'latitude': pos.latitude,
-        'longitude': pos.longitude,
-        'altitude': pos.altitude,
-        'heading': pos.heading,
-        'speed': pos.speed,
-        'accuracy': pos.accuracy,
-      });
+      await _api.post('/locations', payload);
     } catch (_) {
       // Silent — next send will retry
     }

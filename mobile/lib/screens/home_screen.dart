@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../providers/team_provider.dart';
+import '../providers/connectivity_provider.dart';
 import '../models/user.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -160,39 +161,75 @@ class _GreetingCard extends StatelessWidget {
 }
 
 class _QuickActions extends StatelessWidget {
-  final _actions = const [
-    {'icon': Icons.live_tv,                'label': 'Live Feed',  'route': '/live',       'color': Color(0xFFDC2626)},
-    {'icon': Icons.warning_amber_outlined, 'label': 'SOS',        'route': '/sos',        'color': Color(0xFFB91C1C)},
+  const _QuickActions();
+
+  static const _actions = [
+    {'icon': Icons.live_tv,                'label': 'Live Feed', 'route': '/live', 'color': Color(0xFFDC2626), 'bleAllowed': false},
+    {'icon': Icons.warning_amber_outlined, 'label': 'SOS',       'route': '/sos',  'color': Color(0xFFB91C1C), 'bleAllowed': true},
   ];
 
-  const _QuickActions();
+  void _onTap(BuildContext context, Map<String, Object> action) {
+    final conn = context.read<ConnectivityProvider>();
+    final allowed = conn.online || (action['bleAllowed'] == true && conn.isBleOnly);
+    if (!allowed) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        backgroundColor: const Color(0xFF1E293B),
+        behavior: SnackBarBehavior.floating,
+        content: Row(children: [
+          const Icon(Icons.wifi_off, color: Color(0xFF60A5FA), size: 16),
+          const SizedBox(width: 8),
+          Text('${action['label']} requires an internet connection.',
+              style: const TextStyle(color: Colors.white, fontSize: 12)),
+        ]),
+        duration: const Duration(seconds: 2),
+      ));
+      return;
+    }
+    Navigator.pushNamed(context, action['route'] as String);
+  }
 
   @override
   Widget build(BuildContext context) {
+    final conn = context.watch<ConnectivityProvider>();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Text('Quick Access', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
         const SizedBox(height: 12),
         Row(
-          children: _actions.map((a) {
+          children: _actions.asMap().entries.map((entry) {
+            final i = entry.key;
+            final a = entry.value;
+            final bleAllowed = a['bleAllowed'] == true;
+            final available = conn.online || (bleAllowed && conn.isBleOnly);
+            final color = available ? a['color'] as Color : const Color(0xFF374151);
+
             return Expanded(
               child: GestureDetector(
-                onTap: () => Navigator.pushNamed(context, a['route'] as String),
+                onTap: () => _onTap(context, a),
                 child: Container(
-                  margin: EdgeInsets.only(right: a == _actions.last ? 0 : 10),
+                  margin: EdgeInsets.only(right: i < _actions.length - 1 ? 10 : 0),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0F172A),
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: const Color(0xFF1F2937)),
+                    border: Border.all(
+                      color: available ? const Color(0xFF1F2937) : const Color(0xFF1F2937).withValues(alpha: 0.4),
+                    ),
                   ),
-                  child: Column(
-                    children: [
-                      Icon(a['icon'] as IconData, color: a['color'] as Color, size: 24),
+                  child: Opacity(
+                    opacity: available ? 1.0 : 0.4,
+                    child: Column(children: [
+                      Icon(a['icon'] as IconData, color: color, size: 24),
                       const SizedBox(height: 6),
-                      Text(a['label'] as String, style: const TextStyle(color: Color(0xFFD1D5DB), fontSize: 11)),
-                    ],
+                      Text(a['label'] as String,
+                          style: TextStyle(color: available ? const Color(0xFFD1D5DB) : const Color(0xFF6B7280), fontSize: 11)),
+                      if (!available && conn.isBleOnly) ...[
+                        const SizedBox(height: 3),
+                        const Text('WiFi only', style: TextStyle(color: Color(0xFF374151), fontSize: 9, letterSpacing: 0.5)),
+                      ],
+                    ]),
                   ),
                 ),
               ),
@@ -209,6 +246,30 @@ class _TeamsSection extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final conn = context.watch<ConnectivityProvider>();
+    if (!conn.online) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('My Teams', style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 12, fontWeight: FontWeight.w600, letterSpacing: 0.5)),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0F172A),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFF1F2937).withValues(alpha: 0.4)),
+            ),
+            child: const Row(children: [
+              Icon(Icons.wifi_off, color: Color(0xFF374151), size: 16),
+              SizedBox(width: 8),
+              Text('Teams require internet connection', style: TextStyle(color: Color(0xFF4B5563), fontSize: 12)),
+            ]),
+          ),
+        ],
+      );
+    }
+
     final teams = context.watch<TeamProvider>().teams;
     final loading = context.watch<TeamProvider>().loading;
 

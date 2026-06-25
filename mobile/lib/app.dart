@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'main.dart' show navigatorKey;
 import 'providers/auth_provider.dart';
+import 'providers/connectivity_provider.dart' show ConnectivityProvider, NetMode;
+import 'providers/mesh_provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
@@ -21,9 +23,9 @@ import 'screens/live_session_screen.dart';
 import 'screens/video_call_screen.dart';
 import 'providers/location_provider.dart';
 import 'services/push_notification_service.dart';
-import 'providers/connectivity_provider.dart';
 import 'screens/mesh_network_screen.dart';
 import 'services/navigation_state.dart';
+import 'widgets/requires_online.dart';
 
 class DRDApp extends StatelessWidget {
   const DRDApp({super.key});
@@ -43,11 +45,30 @@ class DRDApp extends StatelessWidget {
         useMaterial3: true,
       ),
       builder: (context, child) {
-        final online = context.watch<ConnectivityProvider>().online;
+        final conn = context.watch<ConnectivityProvider>();
+        final auth = context.watch<AuthProvider>();
+        // Only layer mesh/BLE UI for authenticated users — not on splash or login.
+        final authed = auth.status == AuthStatus.authenticated;
         return Stack(
           children: [
             child!,
-            if (!online) const MeshNetworkOverlay(),
+            // Auto-start mesh/BLE scanning when internet drops (authenticated only)
+            if (authed) _MeshLifecycle(online: conn.online),
+            // BLE-only mode: top banner (authenticated only)
+            if (authed && conn.isBleOnly) const _BleBanner(),
+            // Fully offline: show mesh scanning screen as soon as home loads
+            if (authed && conn.isOffline) const MeshNetworkOverlay(),
+            // Always-visible status dot (top-right, tap to expand)
+            if (authed)
+              SafeArea(
+                child: Align(
+                  alignment: Alignment.topRight,
+                  child: Padding(
+                    padding: const EdgeInsets.only(top: 8, right: 12),
+                    child: _ConnectivityDot(conn: conn),
+                  ),
+                ),
+              ),
           ],
         );
       },
@@ -81,6 +102,244 @@ class DRDApp extends StatelessWidget {
         }
         return null;
       },
+    );
+  }
+}
+
+// ── Mesh auto-lifecycle ───────────────────────────────────────────────────────
+// Watches connectivity mode and auto-starts/stops mesh + triggers queue flush.
+
+class _MeshLifecycle extends StatefulWidget {
+  final bool online;
+  const _MeshLifecycle({required this.online});
+
+  @override
+  State<_MeshLifecycle> createState() => _MeshLifecycleState();
+}
+
+class _MeshLifecycleState extends State<_MeshLifecycle> {
+  @override
+  void didUpdateWidget(_MeshLifecycle old) {
+    super.didUpdateWidget(old);
+    if (old.online == widget.online) return;
+
+    final mesh = context.read<MeshProvider>();
+    final auth = context.read<AuthProvider>();
+
+    if (!widget.online && !mesh.active) {
+      mesh.start(userName: auth.user?.username);
+    }
+
+    if (widget.online) {
+      mesh.flushToServer();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
+}
+
+// ── BLE-only mode banner ──────────────────────────────────────────────────────
+// Shown at the top of the app when BLE bridge is connected but no internet.
+// App is fully usable — only internet-only features are gated.
+
+class _BleBanner extends StatelessWidget {
+  const _BleBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Align(
+        alignment: Alignment.topCenter,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0C1A3A),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFF1D4ED8).withValues(alpha: 0.6)),
+          ),
+          child: const Row(children: [
+            Icon(Icons.bluetooth_connected, color: Color(0xFF60A5FA), size: 14),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'BLE Bridge active — SOS & Location available',
+                style: TextStyle(color: Color(0xFF93C5FD), fontSize: 11, fontFamily: 'monospace'),
+              ),
+            ),
+          ]),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Connectivity status dot ───────────────────────────────────────────────────
+
+class _ConnectivityDot extends StatelessWidget {
+  final ConnectivityProvider conn;
+  const _ConnectivityDot({required this.conn});
+
+  Color get _color => switch (conn.mode) {
+    NetMode.online   => const Color(0xFF22C55E),
+    NetMode.bleOnly  => const Color(0xFF3B82F6),
+    NetMode.offline  => const Color(0xFFEF4444),
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => _showPanel(context),
+      child: Container(
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: _color,
+          boxShadow: [BoxShadow(color: _color.withValues(alpha: 0.5), blurRadius: 6, spreadRadius: 1)],
+        ),
+      ),
+    );
+  }
+
+  void _showPanel(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF060D06),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+        side: BorderSide(color: Color(0xFF1F4D1F)),
+      ),
+      builder: (_) => _ConnectivityPanel(conn: conn),
+    );
+  }
+}
+
+// ── Connectivity detail panel (bottom sheet) ──────────────────────────────────
+
+class _ConnectivityPanel extends StatelessWidget {
+  final ConnectivityProvider conn;
+  const _ConnectivityPanel({required this.conn});
+
+  @override
+  Widget build(BuildContext context) {
+    final mesh = context.watch<MeshProvider>();
+    final modeLabel = switch (conn.mode) {
+      NetMode.online  => 'ONLINE',
+      NetMode.bleOnly => 'BLE BRIDGE',
+      NetMode.offline => conn.manualMesh ? 'FORCED MESH' : 'OFFLINE',
+    };
+    final modeColor = switch (conn.mode) {
+      NetMode.online  => const Color(0xFF22C55E),
+      NetMode.bleOnly => const Color(0xFF3B82F6),
+      NetMode.offline => const Color(0xFFEF4444),
+    };
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Handle bar
+          Center(
+            child: Container(
+              width: 40, height: 4,
+              decoration: BoxDecoration(
+                color: const Color(0xFF374151),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // Mode badge
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: modeColor.withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: modeColor.withValues(alpha: 0.4)),
+              ),
+              child: Text(modeLabel, style: TextStyle(color: modeColor, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 2, fontFamily: 'monospace')),
+            ),
+            const Spacer(),
+            IconButton(
+              icon: const Icon(Icons.refresh, color: Color(0xFF6B7280), size: 18),
+              onPressed: () { conn.forceCheck(); Navigator.pop(context); },
+              tooltip: 'Force recheck',
+            ),
+          ]),
+          const SizedBox(height: 16),
+
+          // Stats grid
+          _PanelRow('Network', conn.online ? 'Connected' : 'Disconnected', conn.online ? const Color(0xFF22C55E) : const Color(0xFFEF4444)),
+          _PanelRow('WiFi peers', '${mesh.peerCount}', mesh.peerCount > 0 ? const Color(0xFF22C55E) : const Color(0xFF6B7280)),
+          _PanelRow('BLE peers',  '${mesh.bleDrd}',    mesh.bleDrd   > 0 ? const Color(0xFF60A5FA) : const Color(0xFF6B7280)),
+          _PanelRow('Mesh status', mesh.active ? (mesh.anyPeer ? 'Linked' : 'Scanning') : 'Stopped', mesh.active ? const Color(0xFF22C55E) : const Color(0xFF6B7280)),
+          const SizedBox(height: 16),
+
+          // Manual mesh toggle
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              style: OutlinedButton.styleFrom(
+                foregroundColor: conn.manualMesh ? const Color(0xFFF59E0B) : const Color(0xFF9CA3AF),
+                side: BorderSide(color: conn.manualMesh ? const Color(0xFFF59E0B) : const Color(0xFF374151)),
+                padding: const EdgeInsets.symmetric(vertical: 12),
+              ),
+              icon: Icon(conn.manualMesh ? Icons.wifi_off : Icons.hub_outlined, size: 16),
+              label: Text(
+                conn.manualMesh ? 'FORCE MESH: ON (tap to disable)' : 'FORCE MESH MODE',
+                style: const TextStyle(fontSize: 11, letterSpacing: 1, fontFamily: 'monospace'),
+              ),
+              onPressed: () { conn.toggleManualMesh(); Navigator.pop(context); },
+            ),
+          ),
+
+          if (!mesh.active) ...[
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: const Color(0xFF22C55E),
+                  side: const BorderSide(color: Color(0xFF166534)),
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+                icon: const Icon(Icons.wifi_tethering, size: 16),
+                label: const Text('START MESH NOW', style: TextStyle(fontSize: 11, letterSpacing: 1, fontFamily: 'monospace')),
+                onPressed: () {
+                  final auth = context.read<AuthProvider>();
+                  context.read<MeshProvider>().start(userName: auth.user?.username);
+                  Navigator.pop(context);
+                },
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _PanelRow extends StatelessWidget {
+  final String label;
+  final String value;
+  final Color valueColor;
+  const _PanelRow(this.label, this.value, this.valueColor);
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 5),
+      child: Row(children: [
+        Text(label, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
+        const Spacer(),
+        Text(value, style: TextStyle(color: valueColor, fontSize: 12, fontWeight: FontWeight.w700, fontFamily: 'monospace')),
+      ]),
     );
   }
 }
@@ -159,12 +418,14 @@ class _MainShellState extends State<MainShell> {
     }
   }
 
-  static const _screens = [
-    HomeScreen(),
-    LiveMapScreen(),
-    MissionListScreen(),
-    ChatHubScreen(),
-    ProfileScreen(),
+  // Home is not wrapped here because SOS lives inside it and must stay reachable.
+  // Chat requires real internet — BLE bridge carries SOS and location only.
+  static final _screens = [
+    const HomeScreen(),
+    const RequiresOnline(child: LiveMapScreen()),
+    const RequiresOnline(child: MissionListScreen()),
+    const RequiresOnline(child: ChatHubScreen()),
+    const RequiresOnline(child: ProfileScreen()),
   ];
 
   @override
@@ -176,16 +437,11 @@ class _MainShellState extends State<MainShell> {
           IndexedStack(index: _tab, children: _screens),
           // Transparent left-edge strip — swipe right from here to trigger logout
           Positioned(
-            left: 0,
-            top: 0,
-            bottom: 0,
-            width: 22,
+            left: 0, top: 0, bottom: 0, width: 22,
             child: GestureDetector(
               behavior: HitTestBehavior.translucent,
               onHorizontalDragEnd: (details) {
-                if (details.velocity.pixelsPerSecond.dx > 400) {
-                  _confirmLogout();
-                }
+                if (details.velocity.pixelsPerSecond.dx > 400) _confirmLogout();
               },
             ),
           ),
@@ -201,11 +457,11 @@ class _MainShellState extends State<MainShell> {
             height: 60,
             child: Row(
               children: [
-                _NavTab(icon: Icons.home_outlined, activeIcon: Icons.home, label: 'Home', active: _tab == 0, onTap: () => setState(() => _tab = 0)),
-                _NavTab(icon: Icons.map_outlined, activeIcon: Icons.map, label: 'Map', active: _tab == 1, onTap: () => setState(() => _tab = 1)),
-                _NavTab(icon: Icons.assignment_outlined, activeIcon: Icons.assignment, label: 'Missions', active: _tab == 2, onTap: () => setState(() => _tab = 2)),
-                _NavTab(icon: Icons.chat_bubble_outline, activeIcon: Icons.chat_bubble, label: 'Comms', active: _tab == 3, onTap: () => setState(() => _tab = 3)),
-                _NavTab(icon: Icons.person_outline, activeIcon: Icons.person, label: 'Profile', active: _tab == 4, onTap: () => setState(() => _tab = 4)),
+                _NavTab(icon: Icons.home_outlined,       activeIcon: Icons.home,          label: 'Home',     active: _tab == 0, onTap: () => setState(() => _tab = 0)),
+                _NavTab(icon: Icons.map_outlined,        activeIcon: Icons.map,           label: 'Map',      active: _tab == 1, onTap: () => setState(() => _tab = 1)),
+                _NavTab(icon: Icons.assignment_outlined, activeIcon: Icons.assignment,    label: 'Missions', active: _tab == 2, onTap: () => setState(() => _tab = 2)),
+                _NavTab(icon: Icons.chat_bubble_outline, activeIcon: Icons.chat_bubble,  label: 'Comms',    active: _tab == 3, onTap: () => setState(() => _tab = 3)),
+                _NavTab(icon: Icons.person_outline,      activeIcon: Icons.person,        label: 'Profile',  active: _tab == 4, onTap: () => setState(() => _tab = 4)),
               ],
             ),
           ),
