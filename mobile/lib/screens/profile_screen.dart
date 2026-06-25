@@ -1,8 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:image_picker/image_picker.dart';
 import '../providers/auth_provider.dart';
 import '../models/user.dart';
 import '../services/api_service.dart';
+import '../config/environment.dart';
 
 // ── Role permissions map ───────────────────────────────────────────────────────
 const _rolePermissions = {
@@ -128,7 +131,7 @@ class _ProfileScreenState extends State<ProfileScreen> with SingleTickerProvider
 
 // ── Identity card ─────────────────────────────────────────────────────────────
 
-class _IdentityCard extends StatelessWidget {
+class _IdentityCard extends StatefulWidget {
   final User? user;
   final Color roleColor;
   final String roleLabel;
@@ -136,7 +139,45 @@ class _IdentityCard extends StatelessWidget {
   const _IdentityCard({this.user, required this.roleColor, required this.roleLabel});
 
   @override
+  State<_IdentityCard> createState() => _IdentityCardState();
+}
+
+class _IdentityCardState extends State<_IdentityCard> {
+  bool _uploading = false;
+
+  Future<void> _pickAndUpload() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80, maxWidth: 512);
+    if (picked == null || !mounted) return;
+
+    setState(() => _uploading = true);
+    try {
+      final auth = context.read<AuthProvider>();
+      final result = await ApiService().uploadFile(
+        '/users/${auth.user!.id}/avatar',
+        File(picked.path),
+        'file',
+      );
+      final rawUrl = result['avatar_url'] as String?;
+      if (rawUrl != null && mounted) {
+        await auth.updateUser(auth.user!.copyWith(avatarUrl: EnvironmentConfig.resolveUrl(rawUrl)));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Failed to upload photo'),
+          backgroundColor: Color(0xFF7F1D1D),
+        ));
+      }
+    }
+    if (mounted) setState(() => _uploading = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final user = widget.user;
+    final roleColor = widget.roleColor;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
       decoration: const BoxDecoration(
@@ -145,19 +186,38 @@ class _IdentityCard extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Container(
-            width: 52,
-            height: 52,
-            decoration: BoxDecoration(
-              color: roleColor.withValues(alpha: 0.12),
-              shape: BoxShape.circle,
-              border: Border.all(color: roleColor.withValues(alpha: 0.4), width: 1.5),
-            ),
-            child: Center(
-              child: Text(
-                user?.fullName.substring(0, 1).toUpperCase() ?? '?',
-                style: TextStyle(color: roleColor, fontSize: 22, fontWeight: FontWeight.bold),
-              ),
+          GestureDetector(
+            onTap: _uploading ? null : _pickAndUpload,
+            child: Stack(
+              children: [
+                Container(
+                  width: 52,
+                  height: 52,
+                  decoration: BoxDecoration(
+                    color: roleColor.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                    border: Border.all(color: roleColor.withValues(alpha: 0.4), width: 1.5),
+                  ),
+                  child: _uploading
+                      ? const Padding(
+                          padding: EdgeInsets.all(14),
+                          child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF22C55E)),
+                        )
+                      : ClipOval(
+                          child: user?.avatarUrl != null
+                              ? Image.network(EnvironmentConfig.resolveUrl(user!.avatarUrl!), fit: BoxFit.cover, errorBuilder: (_, __, st) => _initials(user, roleColor))
+                              : _initials(user, roleColor),
+                        ),
+                ),
+                Positioned(
+                  right: 0, bottom: 0,
+                  child: Container(
+                    width: 18, height: 18,
+                    decoration: const BoxDecoration(color: Color(0xFF16A34A), shape: BoxShape.circle),
+                    child: const Icon(Icons.camera_alt, color: Colors.white, size: 10),
+                  ),
+                ),
+              ],
             ),
           ),
           const SizedBox(width: 14),
@@ -181,7 +241,7 @@ class _IdentityCard extends StatelessWidget {
               border: Border.all(color: roleColor.withValues(alpha: 0.3)),
             ),
             child: Text(
-              roleLabel,
+              widget.roleLabel,
               style: TextStyle(
                 color: roleColor,
                 fontSize: 9,
@@ -195,6 +255,13 @@ class _IdentityCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _initials(User? user, Color color) => Center(
+    child: Text(
+      user?.fullName.isNotEmpty == true ? user!.fullName[0].toUpperCase() : '?',
+      style: TextStyle(color: color, fontSize: 22, fontWeight: FontWeight.bold),
+    ),
+  );
 }
 
 // ── Profile tab ───────────────────────────────────────────────────────────────
@@ -225,6 +292,14 @@ class _ProfileTabState extends State<_ProfileTab> {
     _nameCtrl.dispose();
     _phoneCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _refresh() async {
+    try {
+      final auth = context.read<AuthProvider>();
+      final data = await ApiService().get('/users/${auth.user!.id}');
+      await auth.updateUser(User.fromJson(data as Map<String, dynamic>));
+    } catch (_) {}
   }
 
   Future<void> _save() async {
@@ -277,12 +352,17 @@ class _ProfileTabState extends State<_ProfileTab> {
   Widget build(BuildContext context) {
     final user = context.select<AuthProvider, User?>((a) => a.user);
 
-    return SingleChildScrollView(
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          _Section(
-            title: 'Account Details',
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      color: const Color(0xFF22C55E),
+      backgroundColor: const Color(0xFF060D06),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            _Section(
+              title: 'Account Details',
             trailing: _editing
                 ? _saving
                     ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Color(0xFF22C55E)))
@@ -330,6 +410,7 @@ class _ProfileTabState extends State<_ProfileTab> {
           const SizedBox(height: 20),
         ],
       ),
+    ),
     );
   }
 }

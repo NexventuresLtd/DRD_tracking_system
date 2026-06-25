@@ -14,8 +14,8 @@ class Zone(Base):
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     zone_type: Mapped[str] = mapped_column(String(50), default="operational")
     shape: Mapped[str] = mapped_column(String(20), default="polygon")  # polygon, circle, rectangle
-    color: Mapped[str] = mapped_column(String(7), default="#6366f1")
-    fill_color: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    color: Mapped[str] = mapped_column(String(20), default="#6366f1")
+    fill_color: Mapped[str | None] = mapped_column(String(20), nullable=True)
     polygon_points: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     center_lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     center_lng: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -26,6 +26,7 @@ class Zone(Base):
     mission_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("missions.id", ondelete="SET NULL"), nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    review_status: Mapped[str] = mapped_column(String(20), default="approved")  # approved, pending_review, rejected
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 

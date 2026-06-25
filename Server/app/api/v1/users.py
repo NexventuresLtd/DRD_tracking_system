@@ -17,11 +17,12 @@ async def list_users(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     search: Optional[str] = None,
+    role: Optional[str] = None,
     current_user: User = Depends(require_leader_or_above),
     db: AsyncSession = Depends(get_db),
 ):
     svc = UserService(db)
-    users, total = await svc.list_users(page=page, page_size=page_size, search=search)
+    users, total = await svc.list_users(page=page, page_size=page_size, search=search, role=role)
     return {"users": users, "total": total, "page": page, "page_size": page_size}
 
 

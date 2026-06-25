@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { adminApi, mediaUrl } from "../services/api";
+import { adminApi, teamApi, mediaUrl } from "../services/api";
 import type { User, Invite, AuditLog } from "../types";
 import {
   MdPeople, MdQrCode, MdHistory, MdAdd, MdBlock, MdRefresh,
@@ -130,16 +130,20 @@ function UsersTab() {
   const [editUser, setEditUser] = useState<User | null>(null);
   const [resetUser, setResetUser] = useState<User | null>(null);
   const [deleteUser, setDeleteUser] = useState<User | null>(null);
-  const [createForm, setCreateForm] = useState({ email: "", username: "", full_name: "", password: "", role: "field_user", phone: "" });
+  const [createForm, setCreateForm] = useState({ email: "", username: "", full_name: "", password: "", role: "field_user", phone: "", team_id: "" });
   const [showPass, setShowPass] = useState(false);
   const [newPass, setNewPass] = useState("");
   const [msg, setMsg] = useState("");
+  const [allTeams, setAllTeams] = useState<{ id: string; name: string }[]>([]);
 
   const load = () => {
     setLoading(true);
     adminApi.getUsers().then(({ data }) => setUsers(data.users)).catch(() => {}).finally(() => setLoading(false));
   };
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    teamApi.list().then(({ data }) => setAllTeams(data?.teams ?? data ?? [])).catch(() => {});
+  }, []);
 
   const filtered = users.filter((u) =>
     !search || u.full_name?.toLowerCase().includes(search.toLowerCase()) ||
@@ -152,9 +156,12 @@ function UsersTab() {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await adminApi.createUser(createForm);
+      const { data: newUser } = await adminApi.createUser(createForm);
+      if (createForm.team_id && newUser?.id) {
+        await teamApi.addMember(createForm.team_id, { user_id: newUser.id, role_in_team: "member" }).catch(() => {});
+      }
       setShowCreate(false);
-      setCreateForm({ email: "", username: "", full_name: "", password: "", role: "field_user", phone: "" });
+      setCreateForm({ email: "", username: "", full_name: "", password: "", role: "field_user", phone: "", team_id: "" });
       load();
       flash("User created");
     } catch (err: any) {
@@ -344,6 +351,19 @@ function UsersTab() {
                 {ROLES.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
               </select>
             </div>
+            {allTeams.length > 0 && (
+              <div>
+                <label style={hk.label}>Add to Team (optional)</label>
+                <select
+                  value={createForm.team_id}
+                  onChange={(e) => setCreateForm({ ...createForm, team_id: e.target.value })}
+                  style={{ ...hk.input, appearance: "none" }}
+                >
+                  <option value="">— No team —</option>
+                  {allTeams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+            )}
             <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
               <button type="button" onClick={() => setShowCreate(false)} style={{ ...hk.btn("#0a140a"), flex: 1, justifyContent: "center" }}>CANCEL</button>
               <button type="submit" style={{ ...hk.btn(), flex: 1, justifyContent: "center" }}>CREATE USER</button>

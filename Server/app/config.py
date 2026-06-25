@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     OTP_BYPASS_CODE: str = "555555"
     OTP_EXPIRE_MINUTES: int = 10
 
+    FCM_SERVER_KEY: str = ""
+
     UPLOAD_DIR: str = "uploads"
     MAX_UPLOAD_SIZE_MB: int = 50
 

@@ -38,7 +38,7 @@ class TeamProvider extends ChangeNotifier {
     _loading = true;
     notifyListeners();
     try {
-      final data = await _api.get('/teams') as List<dynamic>;
+      final data = await _api.get('/teams?mine=true') as List<dynamic>;
       _teams = data.map((e) => TeamData.fromJson(e as Map<String, dynamic>)).toList();
     } catch (_) {}
     _loading = false;

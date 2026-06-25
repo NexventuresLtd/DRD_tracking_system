@@ -9,7 +9,8 @@ from app.config import settings
 from app.database import init_db
 from app.api.v1 import auth, users, teams, locations, routes, pois, events, messages, zones, route_follow_sessions, evidence, live_sessions, admin, missions, contacts, drawings, notifications, sos, geofences, packages, playback, posts
 from fastapi.staticfiles import StaticFiles
-from app.websocket import location_ws, event_ws, message_ws, video_ws, notification_ws
+from app.websocket import location_ws, event_ws, message_ws, notification_ws
+from app.websocket.webrtc_ws import router as webrtc_ws_router
 from app.middleware.cors import setup_cors
 from app.websocket.manager import manager
 from app.middleware.audit import AuditMiddleware
@@ -124,8 +125,8 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 app.include_router(location_ws.router)
 app.include_router(event_ws.router)
 app.include_router(message_ws.router)
-app.include_router(video_ws.router)
 app.include_router(notification_ws.router)
+app.include_router(webrtc_ws_router)
 
 # Error handlers
 @app.exception_handler(Exception)

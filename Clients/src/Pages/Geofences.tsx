@@ -12,7 +12,7 @@ function CirclePlacer({ onPlace }: { onPlace: (lat: number, lng: number) => void
 
 const ZONE_COLORS = ["#6366f1", "#16a34a", "#dc2626", "#16a34a", "#d97706", "#0891b2"];
 
-export default function GeofencesPage() {
+export default function GeofencesTab() {
   const { user } = useAuthStore();
   const canEdit = user && ["operations_coordinator", "planning_officer", "team_leader"].includes(user.role);
   const [fences, setFences] = useState<Fence[]>([]);

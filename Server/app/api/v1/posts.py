@@ -152,15 +152,8 @@ async def list_posts(
 async def create_post(
     data: PostCreate,
     db: AsyncSession = Depends(get_db),
-    user: User = Depends(get_current_user),
+    user: User = Depends(require_role(COORDINATOR)),
 ):
-    if user.role not in (COORDINATOR, PLANNING):
-        raise HTTPException(403, "Insufficient permissions")
-    if user.role == PLANNING:
-        # Planning officers can only create if they have a global editor grant
-        # (granted by coordinator via /posts/grant-global-access — simplified: check flag)
-        # For now, planning officers can create — coordinator controls publish
-        pass
 
     post = Post(
         name=data.name,
@@ -306,6 +299,12 @@ async def map_posts(
 
     result = await db.execute(q)
     posts = result.scalars().all()
+    visible = [p for p in posts if _can_view(p, user)]
+    creator_ids = list({p.created_by for p in visible if p.created_by})
+    creators: dict = {}
+    if creator_ids:
+        u_result = await db.execute(select(User).where(User.id.in_(creator_ids)))
+        creators = {u.id: u for u in u_result.scalars().all()}
     return [
         {
             "id": str(p.id),
@@ -318,9 +317,14 @@ async def map_posts(
             "is_published": p.is_published,
             "classification": p.classification,
             "description": p.description,
+            "notes": getattr(p, "notes", None),
             "mission": p.mission,
+            "created_by": str(p.created_by) if p.created_by else None,
+            "creator_name": (creators[p.created_by].full_name or creators[p.created_by].username) if p.created_by and p.created_by in creators else None,
+            "creator_username": creators[p.created_by].username if p.created_by and p.created_by in creators else None,
+            "created_at": p.created_at.isoformat() if p.created_at else None,
         }
-        for p in posts if _can_view(p, user)
+        for p in visible
     ]
 
 

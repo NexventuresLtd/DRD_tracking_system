@@ -8,9 +8,10 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models.user import User
+from app.models.user import User, UserRole
 from app.models.sos import SOSEvent, SOSStatus
 from app.websocket.manager import manager
+from app.services.notification_service import NotificationService
 
 router = APIRouter(prefix="/sos", tags=["SOS"])
 
@@ -40,20 +41,41 @@ async def trigger_sos(
     await db.commit()
     await db.refresh(event)
 
-    await manager.broadcast_to_room(
-        "events",
-        {
-            "type": "sos_alert",
-            "sos_id": str(event.id),
-            "triggered_by": str(current_user.id),
-            "user_name": current_user.full_name,
-            "latitude": data.latitude,
-            "longitude": data.longitude,
-            "message": data.message,
-            "status": "active",
-            "created_at": event.created_at.isoformat(),
-        },
+    payload = {
+        "type": "sos_alert",
+        "sos_id": str(event.id),
+        "triggered_by": str(current_user.id),
+        "user_name": current_user.full_name or current_user.username,
+        "latitude": data.latitude,
+        "longitude": data.longitude,
+        "message": data.message,
+        "status": "active",
+        "created_at": event.created_at.isoformat(),
+    }
+    await manager.broadcast_to_room("events", payload)
+
+    # Push notification to all coordinators and planning officers
+    commanders = await db.execute(
+        select(User).where(
+            User.role.in_([UserRole.operations_coordinator, UserRole.planning_officer]),
+            User.is_active == True,
+            User.id != current_user.id,
+        )
     )
+    notif_svc = NotificationService(db)
+    loc_str = f" at {data.latitude:.4f}, {data.longitude:.4f}" if data.latitude and data.longitude else ""
+    body = (data.message or f"Emergency signal from {current_user.full_name or current_user.username}{loc_str}")
+    for commander in commanders.scalars().all():
+        await notif_svc.create_and_send(
+            user_id=commander.id,
+            type="sos_alert",
+            title=f"🚨 SOS — {current_user.full_name or current_user.username}",
+            body=body,
+            ref_id=str(event.id),
+            ref_type="sos",
+            priority="urgent",
+        )
+
     return {"id": str(event.id), "status": "active"}
 
 

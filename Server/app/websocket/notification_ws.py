@@ -17,9 +17,9 @@ async def notifications_ws(websocket: WebSocket, user_id: str, token: str = Quer
         await websocket.close(code=4001)
         return
 
-    await manager.connect(user_id, websocket)
+    await manager.connect(websocket, user_id, room="notifications")
     try:
         while True:
             await websocket.receive_text()
     except WebSocketDisconnect:
-        manager.disconnect(user_id)
+        manager.disconnect(user_id, room="notifications")

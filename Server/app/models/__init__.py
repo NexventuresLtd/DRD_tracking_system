@@ -4,7 +4,11 @@ from app.models.invite import Invite
 from app.models.team import Team, TeamMember
 from app.models.location import Location, LocationHistory
 from app.models.live_session import LiveSession
-from app.models.mission import Mission, MissionObjective, MissionAssignment, MissionIncident, CasualtyReport
+from app.models.mission import (
+    Mission, MissionObjective, MissionAssignment, MissionIncident, CasualtyReport,
+    MissionAcknowledgement, MissionBriefingAttendance, MissionSitrep,
+    MissionCompletionReport, MissionDebriefRecord,
+)
 from app.models.route import Route, RouteWaypoint, RouteAssignment, RouteFollowSession
 from app.models.contact import Contact
 from app.models.drawing import Drawing, DrawingPoint
@@ -30,6 +34,8 @@ __all__ = [
     "Location", "LocationHistory",
     "LiveSession",
     "Mission", "MissionObjective", "MissionAssignment", "MissionIncident", "CasualtyReport",
+    "MissionAcknowledgement", "MissionBriefingAttendance", "MissionSitrep",
+    "MissionCompletionReport", "MissionDebriefRecord",
     "Route", "RouteWaypoint", "RouteAssignment", "RouteFollowSession",
     "Contact",
     "Drawing", "DrawingPoint",

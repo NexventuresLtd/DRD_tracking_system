@@ -1,14 +1,15 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, type CSSProperties } from "react";
 import {
   MapContainer, TileLayer, Polygon, Circle, Rectangle,
   useMapEvents, Marker, Popup,
 } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { MdHexagon } from "react-icons/md";
+import { MdHexagon, MdOutlineCheckCircle, MdOutlineCancel } from "react-icons/md";
 import { zonesApi } from "../services/api";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
+import GeofencesTab from "./Geofences";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -27,6 +28,7 @@ interface Zone {
   is_circle: boolean;
   team_id?: string;
   assignment_status: string;
+  review_status?: string;
   is_active: boolean;
   created_at: string;
 }
@@ -159,7 +161,7 @@ function makeAvatarIcon(user: TeamMember, status: string) {
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function ZonesPage() {
+function ZonesTab() {
   const { user } = useAuthStore();
   const isManager = user?.role === "operations_coordinator" || user?.role === "planning_officer";
   const isLeader = user?.role === "team_leader" || isManager;
@@ -466,11 +468,30 @@ export default function ZonesPage() {
                   {z.assignment_status}
                 </span>
               </div>
-              <div className="mt-1 flex gap-2 text-xs text-green-700">
+              <div className="mt-1 flex gap-2 items-center text-xs text-green-700">
                 <span className="uppercase">{z.shape}</span>
                 <span>·</span>
                 <span className="uppercase">{z.zone_type}</span>
+                {z.review_status && z.review_status !== "approved" && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", background: z.review_status === "pending_review" ? "#1a2d00" : "#2d0a0a", color: z.review_status === "pending_review" ? "#a3e635" : "#fca5a5", fontFamily: "monospace", letterSpacing: 1 }}>
+                    {z.review_status === "pending_review" ? "REVIEW" : "REJECTED"}
+                  </span>
+                )}
               </div>
+              {user?.role === "operations_coordinator" && z.review_status === "pending_review" && (
+                <div className="flex gap-1 mt-1">
+                  <button onClick={async (e) => { e.stopPropagation(); await api.post(`/zones/${z.id}/approve`); load(); }}
+                    className="px-2 py-0.5 text-xs rounded flex items-center gap-1"
+                    style={{ background: "#052e16", color: "#22c55e", border: "1px solid #16a34a" }}>
+                    <MdOutlineCheckCircle size={11} /> Approve
+                  </button>
+                  <button onClick={async (e) => { e.stopPropagation(); await api.post(`/zones/${z.id}/reject`); load(); }}
+                    className="px-2 py-0.5 text-xs rounded flex items-center gap-1"
+                    style={{ background: "#2d0a0a", color: "#fca5a5", border: "1px solid #7f1d1d" }}>
+                    <MdOutlineCancel size={11} /> Reject
+                  </button>
+                </div>
+              )}
               {isManager && (
                 <div className="flex gap-1 mt-2">
                   <button
@@ -836,6 +857,29 @@ export default function ZonesPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Wrapper: Zones + Geofences tabs ──────────────────────────────────────────
+
+export default function ZonesPage() {
+  const [tab, setTab] = useState<"zones" | "geofences">("zones");
+  const tabStyle = (active: boolean): CSSProperties => ({
+    padding: "7px 20px", fontSize: 11, cursor: "pointer", background: "none", border: "none",
+    borderBottom: active ? "2px solid #16a34a" : "2px solid transparent",
+    color: active ? "#22c55e" : "#4b5563",
+    fontFamily: "JetBrains Mono, monospace", letterSpacing: 1.5, textTransform: "uppercase" as const,
+  });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "100%" }}>
+      <div style={{ display: "flex", background: "#060d06", borderBottom: "1px solid #0a1f0a", flexShrink: 0 }}>
+        <button style={tabStyle(tab === "zones")} onClick={() => setTab("zones")}>Zones</button>
+        <button style={tabStyle(tab === "geofences")} onClick={() => setTab("geofences")}>Geofences</button>
+      </div>
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        {tab === "zones" ? <ZonesTab /> : <GeofencesTab />}
+      </div>
     </div>
   );
 }

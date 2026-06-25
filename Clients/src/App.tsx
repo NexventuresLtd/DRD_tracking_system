@@ -2,6 +2,7 @@ import { BrowserRouter, Route, Routes, Navigate } from "react-router-dom";
 import { useState, useEffect, Suspense, lazy } from "react";
 import { useAuthStore } from "./stores/authStore";
 import AppLayout from "./components/layout/AppLayout";
+import { initWebPush } from "./services/webPush";
 
 const Login = lazy(() => import("./Pages/Login"));
 const Dashboard = lazy(() => import("./Pages/Dashboard"));
@@ -17,16 +18,22 @@ const RoutesPage = lazy(() => import("./Pages/Routes"));
 const Evidence = lazy(() => import("./Pages/Evidence"));
 const TeamDetail = lazy(() => import("./Pages/TeamDetail"));
 const SOSPage = lazy(() => import("./Pages/SOS"));
-const Geofences = lazy(() => import("./Pages/Geofences"));
 const LiveFeed = lazy(() => import("./Pages/LiveFeed"));
 const PlaybackPage = lazy(() => import("./Pages/Playback"));
 const AnalyticsPage = lazy(() => import("./Pages/Analytics"));
-const PackagesPage = lazy(() => import("./Pages/Packages"));
+const NetworkPage = lazy(() => import("./Pages/Network"));
 const PostsPage = lazy(() => import("./Pages/Posts"));
 const ZonesPage = lazy(() => import("./Pages/Zones"));
 
 function ProtectedRoute({ children, roles }: { children: React.ReactNode; roles?: string[] }) {
-  const { isAuthenticated, user } = useAuthStore();
+  const { isAuthenticated, user, access_token } = useAuthStore();
+
+  useEffect(() => {
+    if (isAuthenticated && access_token) {
+      initWebPush(access_token);
+    }
+  }, [isAuthenticated, access_token]);
+
   if (!isAuthenticated) return <Navigate to="/login" replace />;
   if (roles && user && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return <>{children}</>;
@@ -147,11 +154,12 @@ export default function App() {
             <Route path="evidence" element={<Evidence />} />
             <Route path="notifications" element={<NotificationsPage />} />
             <Route path="sos" element={<SOSPage />} />
-            <Route path="geofences" element={<Geofences />} />
+            <Route path="geofences" element={<Navigate to="/zones" replace />} />
             <Route path="live-feed" element={<LiveFeed />} />
             <Route path="playback" element={<PlaybackPage />} />
             <Route path="analytics" element={<AnalyticsPage />} />
-            <Route path="packages" element={<PackagesPage />} />
+            <Route path="network" element={<NetworkPage />} />
+            <Route path="packages" element={<Navigate to="/" replace />} />
             <Route path="posts" element={<PostsPage />} />
             <Route path="zones" element={<ZonesPage />} />
             <Route

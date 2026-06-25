@@ -96,13 +96,18 @@ async def start_session(
             uid = uuid.UUID(uid_str)
             await notif_svc.create_and_send(
                 user_id=uid,
-                type="live_session_invite",
-                title=f"LIVE BRIEFING: {body.title}",
-                body=f"{current_user.full_name or current_user.username} started a live session — join now",
+                type="call_incoming",
+                title=f"📞 INCOMING CALL: {body.title}",
+                body=f"{current_user.full_name or current_user.username} is calling — tap to join",
                 ref_id=str(session.id),
                 ref_type="live_session",
                 priority="high",
             )
+            # Send direct WS invite so online users see the banner immediately
+            await manager.send_to(uid_str, {
+                "type": "live_session_invite",
+                "session": _session_dict(session),
+            })
         except Exception:
             pass
 
@@ -122,6 +127,96 @@ async def list_past_sessions(
         q = q.where(LiveSession.mission_id == uuid.UUID(mission_id))
     result = await db.execute(q.order_by(LiveSession.started_at.desc()).limit(50))
     return [_session_dict(s) for s in result.scalars().all()]
+
+
+class InviteBody(BaseModel):
+    user_ids: List[str] = []
+    team_ids: List[str] = []
+
+
+@router.post("/{session_id}/invite")
+async def invite_to_session(
+    session_id: uuid.UUID,
+    body: InviteBody,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.team import TeamMember
+
+    result = await db.execute(select(LiveSession).where(LiveSession.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    if not session.is_active:
+        raise HTTPException(status_code=400, detail="Session is no longer active")
+
+    # Collect user IDs from direct invites + team members
+    invited: list[str] = list(body.user_ids)
+    for team_id in body.team_ids:
+        res = await db.execute(select(TeamMember).where(TeamMember.team_id == uuid.UUID(team_id)))
+        for tm in res.scalars().all():
+            uid = str(tm.user_id)
+            if uid not in invited:
+                invited.append(uid)
+
+    # Update invite_list on session
+    if hasattr(session, "invite_list"):
+        existing = list(session.invite_list or [])
+        for uid in invited:
+            if uid not in existing:
+                existing.append(uid)
+        session.invite_list = existing
+        await db.commit()
+
+    notif_svc = NotificationService(db)
+    session_data = _session_dict(session)
+    for uid_str in invited:
+        try:
+            await notif_svc.create_and_send(
+                user_id=uuid.UUID(uid_str),
+                type="live_session_invite",
+                title=f"LIVE BRIEFING: {session.title}",
+                body=f"{current_user.full_name or current_user.username} invited you to join a live session",
+                ref_id=str(session.id),
+                ref_type="live_session",
+                priority="high",
+            )
+            # Also broadcast invite event on WS so the mobile app can auto-open the session
+            await manager.send_to(uid_str, {
+                "type": "live_session_invite",
+                "session": session_data,
+            })
+        except Exception:
+            pass
+
+    return {"invited": invited, "session_id": str(session_id)}
+
+
+@router.delete("/{session_id}", status_code=204)
+async def delete_session(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from app.models.user import UserRole
+    result = await db.execute(select(LiveSession).where(LiveSession.id == session_id))
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+    can_delete = (
+        session.host_id == current_user.id
+        or current_user.role == UserRole.operations_coordinator
+        or current_user.role == UserRole.planning_officer
+    )
+    if not can_delete:
+        raise HTTPException(status_code=403, detail="Only the host or coordinator can delete this session")
+    await db.delete(session)
+    await db.commit()
+    await manager.broadcast({
+        "type": "live_session_ended",
+        "session_id": str(session_id),
+        "ended_by": str(current_user.id),
+    })
 
 
 @router.post("/{session_id}/end")

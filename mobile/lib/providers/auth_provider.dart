@@ -118,10 +118,23 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> enrollWithVoucher(String code) async {
+  /// Full enrollment — collects user info + voucher code (step 1 + step 2 flow).
+  Future<bool> enrollWithVoucher({
+    required String voucherCode,
+    required String email,
+    required String username,
+    required String fullName,
+    required String password,
+  }) async {
     _error = null;
     try {
-      final data = await _api.post('/auth/enroll/voucher', {'code': code});
+      final data = await _api.post('/auth/enroll/voucher', {
+        'voucher_code': voucherCode,
+        'email': email,
+        'username': username,
+        'full_name': fullName,
+        'password': password,
+      });
       _user = User.fromJson(data['user'] as Map<String, dynamic>);
       await _storage.saveAuth(
         accessToken: data['access_token'] as String,
@@ -138,7 +151,14 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<bool> enrollWithQR(String code) async => enrollWithVoucher(code);
+  /// Legacy single-arg overload kept for backward-compat (not used in new flow).
+  Future<bool> enrollLegacy(String code) async {
+    _error = 'Please use the full registration flow (name, email, password then scan).';
+    notifyListeners();
+    return false;
+  }
+
+  Future<bool> enrollWithQR(String code) async => enrollLegacy(code);
 
   Future<void> updateUser(User updated) async {
     _user = updated;

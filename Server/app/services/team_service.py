@@ -22,22 +22,25 @@ class TeamService:
             leader_id=created_by,
         )
         self.db.add(team)
-        await self.db.flush()
-
-        member = TeamMember(team_id=team.id, user_id=created_by, role_in_team="leader")
-        self.db.add(member)
         await self.db.commit()
         await self.db.refresh(team)
         return team
 
     async def get_by_id(self, team_id: uuid.UUID) -> Optional[Team]:
         result = await self.db.execute(
-            select(Team).options(selectinload(Team.members)).where(Team.id == team_id, Team.is_active == True)
+            select(Team)
+            .options(selectinload(Team.members).selectinload(TeamMember.user))
+            .where(Team.id == team_id, Team.is_active == True)
         )
         return result.scalar_one_or_none()
 
-    async def list_teams(self):
-        result = await self.db.execute(select(Team).where(Team.is_active == True))
+    async def list_teams(self, user_id: Optional[uuid.UUID] = None):
+        query = select(Team).where(Team.is_active == True)
+        if user_id is not None:
+            query = query.join(TeamMember, TeamMember.team_id == Team.id).where(
+                TeamMember.user_id == user_id
+            )
+        result = await self.db.execute(query)
         return result.scalars().all()
 
     async def update(self, team: Team, data: TeamUpdate) -> Team:
@@ -65,6 +68,23 @@ class TeamService:
         await self.db.refresh(member)
         return member
 
+    async def update_member_role(self, team_id: uuid.UUID, user_id: uuid.UUID, role_in_team: str) -> Optional[TeamMember]:
+        result = await self.db.execute(
+            select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.user_id == user_id)
+        )
+        member = result.scalar_one_or_none()
+        if not member:
+            return None
+        member.role_in_team = role_in_team
+        await self.db.commit()
+        # Re-fetch with user loaded since refresh doesn't reload relationships
+        updated = await self.db.execute(
+            select(TeamMember)
+            .options(selectinload(TeamMember.user))
+            .where(TeamMember.team_id == team_id, TeamMember.user_id == user_id)
+        )
+        return updated.scalar_one_or_none()
+
     async def remove_member(self, team_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         result = await self.db.execute(
             select(TeamMember).where(TeamMember.team_id == team_id, TeamMember.user_id == user_id)
@@ -78,7 +98,8 @@ class TeamService:
 
     async def get_members(self, team_id: uuid.UUID) -> list[TeamMember]:
         result = await self.db.execute(
-            select(TeamMember).options(selectinload(TeamMember.team))
+            select(TeamMember)
+            .options(selectinload(TeamMember.user))
             .where(TeamMember.team_id == team_id)
         )
         return result.scalars().all()

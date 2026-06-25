@@ -3,6 +3,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from jose import jwt, JWTError
 from app.config import settings
 from app.websocket.manager import manager
+from app.api.v1.messages import _parse_channel
 
 router = APIRouter()
 
@@ -19,7 +20,11 @@ async def message_websocket(websocket: WebSocket, channel: str, token: str = Que
         await websocket.close(code=4001)
         return
 
-    room = f"chat:{channel}"
+    # Normalize channel to the same key that send_message uses when broadcasting,
+    # so WS subscribers and REST broadcasts always end up in the same room.
+    # e.g. "team:UUID" → "UUID", "dm:OTHER_ID" → "sorted_A_B", "global" → "global"
+    _, channel_id = _parse_channel(channel, user_id)
+    room = f"chat:{channel_id}"
     await manager.connect(websocket, user_id, room=room)
     try:
         while True:

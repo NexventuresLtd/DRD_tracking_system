@@ -3,11 +3,11 @@ from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, or_
 from pydantic import BaseModel
 
 from app.database import get_db
-from app.middleware.auth import get_current_user
+from app.middleware.auth import get_current_user, require_coordinator
 from app.models.user import User, UserRole
 from app.models.zone import Zone, ZoneAssignment
 from app.models.team import TeamMember
@@ -85,6 +85,7 @@ def _serialize_zone(z: Zone) -> dict:
         "assignment_status": z.assignment_status,
         "mission_id": str(z.mission_id) if z.mission_id else None,
         "created_by": str(z.created_by) if z.created_by else None,
+        "review_status": z.review_status,
         "is_active": z.is_active,
         "created_at": z.created_at.isoformat() if z.created_at else None,
     }
@@ -130,6 +131,9 @@ async def list_zones(
         if not team_ids:
             return []
         q = q.where(Zone.team_id.in_(team_ids))
+    elif current_user.role == PLANNING:
+        # Planning officers see approved zones + their own pending
+        q = q.where(or_(Zone.review_status == "approved", Zone.created_by == current_user.id))
 
     result = await db.execute(q.order_by(Zone.created_at.desc()))
     return [_serialize_zone(z) for z in result.scalars().all()]
@@ -144,14 +148,48 @@ async def create_zone(
     if current_user.role not in (COORD, PLANNING):
         raise HTTPException(403, "Only coordinators and planning officers can create zones")
 
-    zone = Zone(**data.model_dump(exclude_none=True), created_by=current_user.id)
+    review_status = "pending_review" if current_user.role == PLANNING else "approved"
+    zone = Zone(**data.model_dump(exclude_none=True), created_by=current_user.id, review_status=review_status)
     db.add(zone)
     await db.commit()
     await db.refresh(zone)
 
     payload = _serialize_zone(zone)
-    await manager.broadcast({"type": "zone_created", **payload})
+    if review_status == "approved":
+        await manager.broadcast({"type": "zone_created", **payload})
     return payload
+
+
+@router.post("/{zone_id}/approve", status_code=200)
+async def approve_zone(
+    zone_id: uuid.UUID,
+    current_user: User = Depends(require_coordinator),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Zone).where(Zone.id == zone_id, Zone.is_active == True))
+    zone = result.scalar_one_or_none()
+    if not zone:
+        raise HTTPException(404, "Zone not found")
+    zone.review_status = "approved"
+    await db.commit()
+    await db.refresh(zone)
+    await manager.broadcast({"type": "zone_created", **_serialize_zone(zone)})
+    return {"id": str(zone.id), "review_status": "approved"}
+
+
+@router.post("/{zone_id}/reject", status_code=200)
+async def reject_zone(
+    zone_id: uuid.UUID,
+    current_user: User = Depends(require_coordinator),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(Zone).where(Zone.id == zone_id, Zone.is_active == True))
+    zone = result.scalar_one_or_none()
+    if not zone:
+        raise HTTPException(404, "Zone not found")
+    zone.review_status = "rejected"
+    await db.commit()
+    return {"id": str(zone.id), "review_status": "rejected"}
 
 
 @router.put("/{zone_id}")
@@ -224,7 +262,7 @@ async def assign_team(
     if body.team_id:
         tm = await db.execute(select(TeamMember.user_id).where(TeamMember.team_id == body.team_id))
         for (uid,) in tm.all():
-            await manager.send_to_user(str(uid), {"type": "zone_assigned", **payload})
+            await manager.send_to(str(uid), {"type": "zone_assigned", **payload})
     await manager.broadcast({"type": "zone_updated", **payload})
     return payload
 
@@ -294,7 +332,7 @@ async def create_assignment(
     u = ur.scalar_one_or_none()
     payload = _serialize_assignment(a, u)
 
-    await manager.send_to_user(str(data.user_id), {
+    await manager.send_to(str(data.user_id), {
         "type": "zone_point_assigned",
         "zone_id": str(zone_id),
         "zone_name": zone_name,

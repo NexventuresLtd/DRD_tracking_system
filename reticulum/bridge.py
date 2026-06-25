@@ -143,11 +143,21 @@ async def _handle_message(session: aiohttp.ClientSession, pkt: dict):
     body = {"content": pkt.get("content", ""), "channel": pkt.get("channel", "global")}
     await _post(session, "/api/v1/messages", body, token)
 
+async def _handle_poi(session: aiohttp.ClientSession, pkt: dict):
+    token = pkt.get("token") or API_TOKEN
+    payload = pkt.get("payload", pkt)
+    body = {k: payload[k] for k in ("name", "latitude", "longitude", "poi_type", "color", "description") if k in payload}
+    body.setdefault("name", payload.get("poi_type", "mark").capitalize())
+    if await _post(session, "/api/v1/pois", body, token):
+        log.info("POI stored via mesh: %s", body.get("name"))
+
 async def _dispatch(session: aiohttp.ClientSession, pkt: dict):
     t = pkt.get("type", "")
     if   t == "location_update": await _handle_location(session, pkt)
+    elif t == "location":         await _handle_location(session, pkt)
     elif t == "sos":              await _handle_sos(session, pkt)
     elif t == "message":          await _handle_message(session, pkt)
+    elif t == "poi":              await _handle_poi(session, pkt)
     elif t == "ping":
         src = pkt.get("_src_hash")
         if src:
@@ -272,6 +282,48 @@ async def _announce_loop(dest: RNS.Destination, lxmf_dest: LXMF.LXMPeer):
         log.info("Announced bridge (RNS %s)", RNS.prettyhexrep(dest.hash))
         await asyncio.sleep(ANNOUNCE_INTERVAL)
 
+# ── HTTP sync server (Flutter mesh → server when on same LAN) ─────────────────
+# Phones POST /mesh/sync with a JSON array of MeshMessage envelopes.
+# The bridge authenticates with Authorization: Bearer <token> and forwards
+# each message to the DRD server via the existing _dispatch pipeline.
+
+HTTP_PORT = int(os.getenv("BRIDGE_HTTP_PORT", "4344"))
+
+async def _http_mesh_sync(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    auth = request.headers.get("Authorization", "")
+    if API_TOKEN and auth != f"Bearer {API_TOKEN}":
+        return aiohttp.web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return aiohttp.web.json_response({"error": "bad json"}, status=400)
+
+    messages = body if isinstance(body, list) else [body]
+    session: aiohttp.ClientSession = request.app["session"]
+    queued = 0
+    for msg in messages:
+        if isinstance(msg, dict):
+            await _inbound.put(msg)
+            queued += 1
+    log.info("HTTP /mesh/sync: queued %d messages from %s", queued, request.remote)
+    return aiohttp.web.json_response({"queued": queued})
+
+async def _http_ping(request: aiohttp.web.Request) -> aiohttp.web.Response:
+    """Health-check so phones can discover the bridge via a LAN sweep."""
+    return aiohttp.web.json_response({"service": "drd-reticulum-bridge", "port": HTTP_PORT})
+
+async def _start_http_server(session: aiohttp.ClientSession):
+    app = aiohttp.web.Application()
+    app["session"] = session
+    app.router.add_post("/mesh/sync", _http_mesh_sync)
+    app.router.add_get("/mesh/ping", _http_ping)
+    runner = aiohttp.web.AppRunner(app)
+    await runner.setup()
+    site = aiohttp.web.TCPSite(runner, "0.0.0.0", HTTP_PORT)
+    await site.start()
+    log.info("HTTP sync server listening on 0.0.0.0:%d", HTTP_PORT)
+    return runner
+
 # ── Main ───────────────────────────────────────────────────────────────────────
 
 async def main():
@@ -318,10 +370,12 @@ async def main():
         for sig in (signal.SIGINT, signal.SIGTERM):
             signal.signal(sig, _sig)
 
+        http_runner = await _start_http_server(session)
+
         tasks = [
-            asyncio.create_task(_packet_worker(session),           name="packet-worker"),
+            asyncio.create_task(_packet_worker(session),                 name="packet-worker"),
             asyncio.create_task(_ws_subscriber(lxmf_router, lxmf_dest), name="ws-subscriber"),
-            asyncio.create_task(_announce_loop(raw_dest, lxmf_dest),    name="announce"),
+            asyncio.create_task(_announce_loop(raw_dest, lxmf_dest),     name="announce"),
         ]
 
         await stop.wait()
@@ -329,6 +383,7 @@ async def main():
         for t in tasks:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        await http_runner.cleanup()
 
     log.info("Bridge stopped.")
 

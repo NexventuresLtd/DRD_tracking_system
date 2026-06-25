@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 import random
 import uuid as _uuid
@@ -68,7 +69,7 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
         phone=data.phone,
         invite_code=data.invite_code,
     )
-    await send_welcome_email(user.email, user.full_name, user.role.value)
+    asyncio.create_task(send_welcome_email(user.email, user.full_name, user.role.value))
     return {"message": "Account created successfully", "user_id": str(user.id)}
 
 
@@ -87,6 +88,8 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Account deactivated")
+    if not user.network_joined:
+        raise HTTPException(status_code=403, detail="Scan your network voucher to join before logging in")
 
     otp_code = f"{random.randint(0, 999999):06d}"
     otp_session = str(_uuid.uuid4())
@@ -99,7 +102,7 @@ async def login(data: LoginRequest, request: Request, db: AsyncSession = Depends
         "ip_address": request.client.host if request.client else None,
     }
 
-    await send_otp_email(user.email, user.full_name, otp_code)
+    asyncio.create_task(send_otp_email(user.email, user.full_name, otp_code))
 
     return {
         "requires_otp": True,
@@ -165,7 +168,7 @@ async def resend_otp(body: dict, db: AsyncSession = Depends(get_db)):
     session_data["code"] = otp_code
     session_data["expires_at"] = datetime.utcnow() + timedelta(minutes=settings.OTP_EXPIRE_MINUTES)
 
-    await send_otp_email(user.email, user.full_name, otp_code)
+    asyncio.create_task(send_otp_email(user.email, user.full_name, otp_code))
     return {"message": "OTP resent"}
 
 
@@ -192,7 +195,7 @@ async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depend
     user = await svc.get_user_by_email(data.email)
     if user:
         token = create_password_reset_token(str(user.id))
-        await send_password_reset_email(user.email, token, user.full_name)
+        asyncio.create_task(send_password_reset_email(user.email, token, user.full_name))
     return {"message": "If this email exists, a reset link has been sent"}
 
 
@@ -254,7 +257,7 @@ async def enroll_qr(data: QREnrollRequest, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/enroll/voucher")
-async def enroll_voucher(data: VoucherEnrollRequest, db: AsyncSession = Depends(get_db)):
+async def enroll_voucher(data: VoucherEnrollRequest, request: Request, db: AsyncSession = Depends(get_db)):
     svc = AuthService(db)
     invite = await svc.validate_invite(data.voucher_code)
     if not invite:
@@ -270,7 +273,16 @@ async def enroll_voucher(data: VoucherEnrollRequest, db: AsyncSession = Depends(
         password=data.password,
         invite_code=data.voucher_code,
     )
-    return {"message": "Enrolled via voucher", "user_id": str(user.id)}
+    # Return full token response so mobile can auto-login after enrollment
+    result = await svc.login(
+        email=data.email,
+        password=data.password,
+        ip_address=request.client.host if request.client else None,
+    )
+    if not result:
+        raise HTTPException(status_code=500, detail="Enrollment succeeded but login failed")
+    user, access_token, refresh_token = result
+    return _token_response(user, access_token, refresh_token)
 
 
 @router.get("/me", response_model=UserResponse)

@@ -42,6 +42,8 @@ class ApiService {
     return body;
   }
 
+  Future<bool> tryRefresh() => _tryRefresh();
+
   Future<bool> _tryRefresh() async {
     final refresh = _storage.refreshToken;
     if (refresh == null) return false;
@@ -98,13 +100,27 @@ class ApiService {
     return _handleResponse(res);
   }
 
-  Future<Map<String, dynamic>> uploadFile(String path, File file, String fieldName) async {
-    final token = _storage.accessToken;
-    final req = http.MultipartRequest('POST', Uri.parse('$_base$path'));
-    if (token != null) req.headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
-    req.files.add(await http.MultipartFile.fromPath(fieldName, file.path));
-    final streamed = await req.send();
-    final res = await http.Response.fromStream(streamed);
+  Future<Map<String, dynamic>> uploadFile(
+    String path,
+    File file,
+    String fieldName, {
+    Map<String, String>? extraFields,
+  }) async {
+    Future<http.Response> doUpload() async {
+      final token = _storage.accessToken;
+      final req = http.MultipartRequest('POST', Uri.parse('$_base$path'));
+      if (token != null) req.headers[HttpHeaders.authorizationHeader] = 'Bearer $token';
+      req.files.add(await http.MultipartFile.fromPath(fieldName, file.path));
+      if (extraFields != null) req.fields.addAll(extraFields);
+      return http.Response.fromStream(await req.send());
+    }
+
+    var res = await doUpload();
+    if (res.statusCode == 401) {
+      final refreshed = await _tryRefresh();
+      if (!refreshed) throw ApiException(401, 'Unauthorized');
+      res = await doUpload();
+    }
     return _handleResponse(res);
   }
 }

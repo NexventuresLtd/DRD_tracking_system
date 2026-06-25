@@ -21,4 +21,10 @@ class EnvironmentConfig {
   static String get wsBaseUrl => _wsBaseUrl;
   static String get env => _env;
   static bool get isDevelopment => _env == 'development';
+
+  /// Converts a server-relative path (e.g. /uploads/avatars/x.jpg) to a full URL.
+  static String resolveUrl(String path) {
+    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    return '$_apiBaseUrl$path';
+  }
 }

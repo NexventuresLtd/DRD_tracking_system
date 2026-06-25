@@ -18,6 +18,7 @@ class TeamUpdate(BaseModel):
     color: Optional[str] = None
     icon: Optional[str] = None
     leader_id: Optional[uuid.UUID] = None
+    location_sharing: Optional[bool] = None
 
 
 class TeamMemberResponse(BaseModel):
@@ -38,6 +39,7 @@ class TeamResponse(BaseModel):
     leader_id: Optional[uuid.UUID] = None
     color: str
     icon: Optional[str] = None
+    location_sharing: bool = False
     is_active: bool
     created_at: datetime
     member_count: Optional[int] = None
@@ -52,3 +54,7 @@ class TeamDetailResponse(TeamResponse):
 class AddMemberRequest(BaseModel):
     user_id: uuid.UUID
     role_in_team: Optional[str] = "member"
+
+
+class UpdateMemberRequest(BaseModel):
+    role_in_team: str

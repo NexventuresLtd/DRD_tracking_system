@@ -19,9 +19,16 @@ class UserService:
         result = await self.db.execute(select(User).where(User.id == user_id))
         return result.scalar_one_or_none()
 
-    async def list_users(self, page: int = 1, page_size: int = 50, search: Optional[str] = None):
+    async def list_users(self, page: int = 1, page_size: int = 50, search: Optional[str] = None, role: Optional[str] = None):
         query = select(User).where(User.is_active == True)
         count_query = select(func.count(User.id)).where(User.is_active == True)
+
+        if role:
+            try:
+                query = query.where(User.role == UserRole(role))
+                count_query = count_query.where(User.role == UserRole(role))
+            except ValueError:
+                pass
 
         if search:
             search_term = f"%{search}%"

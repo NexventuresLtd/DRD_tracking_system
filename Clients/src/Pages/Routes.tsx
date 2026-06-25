@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { MapContainer, TileLayer, Polyline, Marker, useMapEvents } from "react-leaflet";
 import L from "leaflet";
-import { MdOutlineFolderOpen, MdClose } from "react-icons/md";
+import { MdOutlineFolderOpen, MdClose, MdOutlineCheckCircle, MdOutlineCancel } from "react-icons/md";
 import api from "../services/api";
 import { useAuthStore } from "../stores/authStore";
 
@@ -25,7 +25,7 @@ delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIcon
 L.Icon.Default.mergeOptions({ iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png", shadowUrl: "" });
 
 interface Waypoint { lat: number; lng: number; name?: string; }
-interface Route { id: string; name: string; description?: string; route_type: string; color: string; waypoint_count: number; created_at: string; }
+interface Route { id: string; name: string; description?: string; route_type: string; color: string; waypoint_count: number; review_status?: string; created_at: string; }
 
 const WP_ICON = L.divIcon({
   className: "",
@@ -43,6 +43,7 @@ function WaypointPlacer({ onPlace }: { onPlace: (lat: number, lng: number) => vo
 export default function RoutesPage() {
   const { user } = useAuthStore();
   const canEdit = user && ["operations_coordinator", "planning_officer", "team_leader"].includes(user.role);
+  const [reviewToast, setReviewToast] = useState(false);
   const [routes, setRoutes] = useState<Route[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Route | null>(null);
@@ -81,7 +82,7 @@ export default function RoutesPage() {
     if (!form.name.trim() || waypoints.length < 2) return;
     setSaving(true);
     try {
-      await api.post("/routes", {
+      const { data } = await api.post("/routes", {
         ...form,
         waypoints: waypoints.map((w) => ({ latitude: w.lat, longitude: w.lng })),
       });
@@ -89,6 +90,10 @@ export default function RoutesPage() {
       setWaypoints([]);
       setForm({ name: "", description: "", route_type: "patrol", color: "#22c55e" });
       await load();
+      if (data?.review_status === "pending_review") {
+        setReviewToast(true);
+        setTimeout(() => setReviewToast(false), 5000);
+      }
     } catch { /**/ } finally { setSaving(false); }
   };
 
@@ -103,6 +108,11 @@ export default function RoutesPage() {
 
   return (
     <div className="h-full flex" style={{ minHeight: "calc(100vh - 64px)" }}>
+      {reviewToast && (
+        <div style={{ position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999, padding: "10px 20px", background: "#052e16", border: "1px solid #16a34a", color: "#22c55e", fontSize: 12, fontFamily: "monospace", letterSpacing: 1 }}>
+          Route submitted for coordinator review
+        </div>
+      )}
       {/* Left panel */}
       <div className="w-72 shrink-0 flex flex-col" style={{ background: "#060d06", borderRight: "1px solid #0a140a" }}>
         <div className="p-4 flex items-center justify-between" style={{ borderBottom: "1px solid #0a140a" }}>
@@ -194,7 +204,28 @@ export default function RoutesPage() {
                 <div className="w-3 h-3 rounded-full mt-1 shrink-0" style={{ background: r.color }} />
                 <div className="flex-1 min-w-0">
                   <p className="text-white text-sm font-medium truncate">{r.name}</p>
-                  <p className="text-gray-500 text-xs capitalize">{r.route_type} · {r.waypoint_count} waypoints</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-gray-500 text-xs capitalize">{r.route_type} · {r.waypoint_count} waypoints</p>
+                    {r.review_status && r.review_status !== "approved" && (
+                      <span style={{ fontSize: 9, padding: "1px 5px", background: r.review_status === "pending_review" ? "#1a2d00" : "#2d0a0a", color: r.review_status === "pending_review" ? "#a3e635" : "#fca5a5", fontFamily: "monospace", letterSpacing: 1 }}>
+                        {r.review_status === "pending_review" ? "REVIEW" : "REJECTED"}
+                      </span>
+                    )}
+                  </div>
+                  {user?.role === "operations_coordinator" && r.review_status === "pending_review" && (
+                    <div className="flex gap-1 mt-1">
+                      <button onClick={async (e) => { e.stopPropagation(); await api.post(`/routes/${r.id}/approve`); load(); }}
+                        className="flex items-center gap-0.5 px-1.5 py-0.5 text-xs rounded"
+                        style={{ background: "#052e16", color: "#22c55e", border: "1px solid #16a34a" }}>
+                        <MdOutlineCheckCircle size={10} /> Approve
+                      </button>
+                      <button onClick={async (e) => { e.stopPropagation(); await api.post(`/routes/${r.id}/reject`); load(); }}
+                        className="flex items-center gap-0.5 px-1.5 py-0.5 text-xs rounded"
+                        style={{ background: "#2d0a0a", color: "#fca5a5", border: "1px solid #7f1d1d" }}>
+                        <MdOutlineCancel size={10} /> Reject
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {canEdit && (
                   <button onClick={(e) => deleteRoute(r.id, e)} className="text-gray-600 hover:text-red-400 text-xs shrink-0"><MdClose size={13} /></button>

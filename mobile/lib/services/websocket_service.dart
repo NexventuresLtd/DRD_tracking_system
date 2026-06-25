@@ -69,6 +69,17 @@ class WebSocketService {
     if (_connected) _channel?.sink.add(jsonEncode(msg));
   }
 
+  // Forward a message directly to registered handlers without requiring a WS connection.
+  // Used by PushNotificationService to bridge its own WS into the handler registry.
+  void dispatch(Map<String, dynamic> msg) {
+    final type = msg['type'] as String?;
+    if (type != null) {
+      for (final handler in List<WsHandler>.from(_handlers[type] ?? [])) {
+        handler(msg);
+      }
+    }
+  }
+
   Future<void> disconnect() async {
     _reconnectTimer?.cancel();
     _sub?.cancel();

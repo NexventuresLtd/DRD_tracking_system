@@ -141,7 +141,7 @@ export interface LiveLocation {
   accuracy?: number;
   status: LocationStatus;
   last_updated: string;
-  user?: User;
+  user?: User & { team?: string };
 }
 
 export interface Contact {

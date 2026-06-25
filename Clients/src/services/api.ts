@@ -73,7 +73,7 @@ export const userApi = {
 };
 
 export const teamApi = {
-  list: () => api.get("/teams"),
+  list: (mine = false) => api.get("/teams", { params: mine ? { mine: true } : undefined }),
   create: (data: object) => api.post("/teams", data),
   getById: (id: string) => api.get(`/teams/${id}`),
   update: (id: string, data: object) => api.put(`/teams/${id}`, data),
@@ -101,13 +101,15 @@ export const adminApi = {
 export const missionApi = {
   list: (params?: object) => api.get("/missions", { params }),
   getById: (id: string) => api.get(`/missions/${id}`),
+  getActive: () => api.get("/missions/my-active"),
   create: (data: object) => api.post("/missions", data),
   update: (id: string, data: object) => api.put(`/missions/${id}`, data),
   delete: (id: string) => api.delete(`/missions/${id}`),
   assign: (id: string, data: object) => api.post(`/missions/${id}/assignments`, data),
+  unassign: (id: string, assignmentId: string) => api.delete(`/missions/${id}/assignments/${assignmentId}`),
   notify: (id: string, data: object) => api.post(`/missions/${id}/notify`, data),
-  completeObjective: (missionId: string, objId: string) =>
-    api.post(`/missions/${missionId}/objectives/${objId}/complete`),
+  completeObjective: (missionId: string, objId: string, data?: object) =>
+    api.post(`/missions/${missionId}/objectives/${objId}/complete`, data),
   startBriefing: (id: string) => api.post(`/missions/${id}/start-briefing`),
   // Incidents
   listIncidents: (id: string) => api.get(`/missions/${id}/incidents`),
@@ -123,7 +125,38 @@ export const missionApi = {
     api.patch(`/missions/${missionId}/evidence/${evidenceId}/approve`, { action }),
   // Package download
   downloadPackage: (id: string) => api.get(`/missions/${id}/package`),
+  // Lifecycle transitions (coordinator)
+  approve: (id: string) => api.post(`/missions/${id}/approve`),
+  activate: (id: string) => api.post(`/missions/${id}/activate`),
+  suspend: (id: string, data: object) => api.post(`/missions/${id}/suspend`, data),
+  resume: (id: string) => api.post(`/missions/${id}/resume`),
+  completeMission: (id: string) => api.post(`/missions/${id}/complete`),
+  archive: (id: string) => api.post(`/missions/${id}/archive`),
+  reviewMission: (id: string, data: object) => api.post(`/missions/${id}/review`, data),
+  // Acknowledge
+  acknowledge: (id: string) => api.post(`/missions/${id}/acknowledge`),
+  listAcknowledgements: (id: string) => api.get(`/missions/${id}/acknowledgements`),
+  // Attendance
+  getAttendance: (id: string) => api.get(`/missions/${id}/briefing/attendance`),
+  markAttendance: (missionId: string, userId: string, status: string) =>
+    api.put(`/missions/${missionId}/briefing/attendance/${userId}`, { status }),
+  // SITREPs
+  listSitreps: (id: string) => api.get(`/missions/${id}/sitreps`),
+  submitSitrep: (id: string, data: object) => api.post(`/missions/${id}/sitreps`, data),
+  // Completion report
+  getCompletionReport: (id: string) => api.get(`/missions/${id}/completion-report`),
+  submitCompletionReport: (id: string, data: object) => api.post(`/missions/${id}/completion-report`, data),
+  // Debrief
+  listDebriefs: (id: string) => api.get(`/missions/${id}/debrief`),
+  submitDebrief: (id: string, data: object) => api.post(`/missions/${id}/debrief`, data),
+  // Live briefing (new path)
+  startLiveBriefing: (id: string) => api.post(`/missions/${id}/briefing/start`),
+  // Live debrief call
+  startLiveDebrief: (id: string) => api.post(`/missions/${id}/debrief/start`),
+  // Mission-linked resources (zones, routes, facilities)
+  getResources: (id: string) => api.get(`/missions/${id}/resources`),
 };
+
 
 export const locationApi = {
   getLive: () => api.get("/locations/live"),
@@ -155,6 +188,7 @@ export const notificationApi = {
 
 export const messageApi = {
   getGlobal: () => api.get("/messages/channels/global"),
+  getEmergency: () => api.get("/messages/channels/emergency"),
   getTeam: (teamId: string) => api.get(`/messages/channels/team/${teamId}`),
   getDM: (uid: string) => api.get(`/messages/channels/dm/${uid}`),
   send: (data: object) => api.post("/messages", data),
@@ -192,6 +226,9 @@ export const liveFeedApi = {
   listPast: (params?: object) => api.get("/live-sessions/past", { params }),
   create: (data: object) => api.post("/live-sessions", data),
   end: (id: string) => api.post(`/live-sessions/${id}/end`),
+  delete: (id: string) => api.delete(`/live-sessions/${id}`),
+  invite: (id: string, data: { user_ids: string[]; team_ids: string[] }) =>
+    api.post(`/live-sessions/${id}/invite`, data),
 };
 
 export const evidenceApi2 = {
@@ -212,6 +249,14 @@ export const postsApi = {
   mapPosts: () => api.get("/posts/map/published"),
   setThreatLevel: (id: string, threat_level: string) => api.patch(`/posts/${id}/threat-level`, { threat_level }),
   searchCommanders: (q: string) => api.get("/posts/search/commanders", { params: { q } }),
+};
+
+export const poiApi = {
+  list: () => api.get("/pois"),
+  create: (data: object) => api.post("/pois", data),
+  update: (id: string, data: object) => api.put(`/pois/${id}`, data),
+  delete: (id: string) => api.delete(`/pois/${id}`),
+  getEvidence: (id: string) => api.get(`/pois/${id}/evidence`),
 };
 
 export const zonesApi = {

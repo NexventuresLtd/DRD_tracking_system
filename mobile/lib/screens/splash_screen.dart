@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/permission_service.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -25,9 +26,15 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   Future<void> _checkAuth() async {
     await Future.delayed(const Duration(seconds: 2));
     if (!mounted) return;
+
     final auth = context.read<AuthProvider>();
+    final permissionsOk = await PermissionService.instance.allCriticalGranted();
+
+    if (!mounted) return;
+
     if (auth.status == AuthStatus.authenticated) {
-      Navigator.pushReplacementNamed(context, '/home');
+      // Authenticated but missing permissions → show permission screen
+      Navigator.pushReplacementNamed(context, permissionsOk ? '/home' : '/permissions');
     } else {
       Navigator.pushReplacementNamed(context, '/login');
     }

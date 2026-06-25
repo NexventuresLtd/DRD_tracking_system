@@ -1,6 +1,6 @@
 import uuid
 import secrets
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from jose import jwt
 from passlib.context import CryptContext
@@ -22,17 +22,17 @@ def verify_password(plain: str, hashed: str) -> bool:
     return pwd_context.verify(plain, hashed)
 
 
-def create_access_token(user_id: str, role: str) -> str:
+def create_access_token(user_id: str, role: str, full_name: str = "") -> str:
     expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     return jwt.encode(
-        {"sub": user_id, "role": role, "type": "access", "exp": expire},
+        {"sub": user_id, "role": role, "type": "access", "exp": expire, "full_name": full_name},
         settings.SECRET_KEY,
         algorithm=settings.ALGORITHM,
     )
 
 
 def create_refresh_token(user_id: str) -> str:
-    expire = datetime.utcnow() + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
+    expire = datetime.now(timezone.utc) + timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS)
     token = secrets.token_urlsafe(64)
     return token, expire
 
@@ -81,7 +81,7 @@ class AuthService:
         invite = await self.get_invite(code)
         if not invite:
             return None
-        if invite.expires_at and invite.expires_at < datetime.utcnow():
+        if invite.expires_at and invite.expires_at < datetime.now(invite.expires_at.tzinfo):
             return None
         if invite.use_count >= invite.max_uses:
             return None
@@ -104,6 +104,11 @@ class AuthService:
             if invite:
                 assigned_role = invite.assigned_role
 
+        has_valid_invite = False
+        if invite_code:
+            chk = await self.validate_invite(invite_code)
+            has_valid_invite = chk is not None
+
         user = User(
             email=email.lower(),
             username=username.lower(),
@@ -111,7 +116,8 @@ class AuthService:
             hashed_password=hash_password(password),
             phone=phone,
             role=assigned_role,
-            is_verified=True,
+            is_verified=has_valid_invite,
+            network_joined=has_valid_invite,
         )
         self.db.add(user)
         await self.db.flush()
@@ -146,7 +152,7 @@ class AuthService:
         if not user.is_active:
             return None
 
-        access_token = create_access_token(str(user.id), user.role.value)
+        access_token = create_access_token(str(user.id), user.role.value, user.full_name or "")
         refresh_token_str, expires_at = create_refresh_token(str(user.id))
 
         session = UserSession(
@@ -171,7 +177,7 @@ class AuthService:
             )
         )
         session = result.scalar_one_or_none()
-        if not session or session.expires_at < datetime.utcnow():
+        if not session or session.expires_at < datetime.now(timezone.utc):
             if session:
                 session.is_active = False
                 await self.db.commit()
@@ -182,7 +188,7 @@ class AuthService:
         if not user:
             return None
 
-        new_access = create_access_token(str(user.id), user.role.value)
+        new_access = create_access_token(str(user.id), user.role.value, user.full_name or "")
         new_refresh, new_expires = create_refresh_token(str(user.id))
 
         session.refresh_token = new_refresh

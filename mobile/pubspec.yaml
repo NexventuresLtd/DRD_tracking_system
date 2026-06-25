@@ -82,6 +82,15 @@ dependencies:
   # Local push notifications (routes, live requests, etc.)
   flutter_local_notifications: ^17.2.2
 
+  # Launch phone calls and URLs
+  url_launcher: ^6.3.0
+
+  # Mesh networking — TCP/UDP LAN mesh (no native code required)
+  crypto: ^3.0.3
+
+  # Bluetooth LE — scanning, advertising, GATT (Reticulum BLE transport)
+  flutter_blue_plus: ^1.35.5
+
   # The following adds the Cupertino Icons font to your application.
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8

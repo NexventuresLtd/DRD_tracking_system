@@ -1,11 +1,23 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.models.mission import Mission, MissionStatus, MissionObjective, MissionAssignment
+from app.models.mission import Mission, MissionStatus, MissionPriority, MissionObjective, MissionAssignment
+
+
+def _parse_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return dt
+    except (ValueError, TypeError):
+        return None
 
 
 class MissionService:
@@ -13,16 +25,26 @@ class MissionService:
         self.db = db
 
     async def create(self, data: dict, created_by: uuid.UUID) -> Mission:
+        priority_raw = data.get("priority", "medium")
+        try:
+            priority = MissionPriority(priority_raw)
+        except ValueError:
+            priority = MissionPriority.medium
+
         mission = Mission(
             name=data["name"],
+            mission_code=data.get("mission_code"),
             description=data.get("description"),
             status=MissionStatus(data.get("status", "draft")),
+            priority=priority,
             created_by=created_by,
-            start_date=data.get("start_date"),
-            end_date=data.get("end_date"),
+            start_date=_parse_dt(data.get("start_date")),
+            end_date=_parse_dt(data.get("end_date")),
             briefing_notes=data.get("briefing_notes"),
             area_of_operations=data.get("area_of_operations"),
-            briefing_datetime=data.get("briefing_datetime"),
+            supporting_assets=data.get("supporting_assets"),
+            extraction_point=data.get("extraction_point"),
+            briefing_datetime=_parse_dt(data.get("briefing_datetime")),
             briefing_audience=data.get("briefing_audience", "all"),
             zone_ids=data.get("zone_ids", []),
             route_ids=data.get("route_ids", []),
@@ -36,12 +58,14 @@ class MissionService:
                 mission_id=mission.id,
                 title=obj["title"],
                 description=obj.get("description"),
-                order_index=i,
+                order_index=obj.get("order_index", i),
+                zone_id=uuid.UUID(obj["zone_id"]) if obj.get("zone_id") else None,
+                route_id=uuid.UUID(obj["route_id"]) if obj.get("route_id") else None,
+                facility_id=uuid.UUID(obj["facility_id"]) if obj.get("facility_id") else None,
             ))
 
         await self.db.commit()
-        await self.db.refresh(mission)
-        return mission
+        return await self.get_by_id(mission.id)
 
     async def get_by_id(self, mission_id: uuid.UUID) -> Optional[Mission]:
         result = await self.db.execute(
@@ -68,17 +92,39 @@ class MissionService:
         mission = await self.get_by_id(mission_id)
         if not mission:
             return None
-        for field in ("name", "description", "briefing_notes", "area_of_operations",
+        dt_fields = {"start_date", "end_date", "briefing_datetime"}
+        for field in ("name", "mission_code", "description", "briefing_notes", "area_of_operations",
+                      "supporting_assets", "extraction_point",
                       "start_date", "end_date", "briefing_datetime",
                       "briefing_audience", "zone_ids", "route_ids", "facility_ids", "live_session_id"):
             if field in data:
-                setattr(mission, field, data[field])
+                setattr(mission, field, _parse_dt(data[field]) if field in dt_fields else data[field])
         if "status" in data:
             mission.status = MissionStatus(data["status"])
+        if "priority" in data:
+            try:
+                mission.priority = MissionPriority(data["priority"])
+            except ValueError:
+                pass
         mission.updated_at = datetime.utcnow()
+        # Replace objectives if provided
+        if "objectives" in data:
+            for obj in (mission.objectives or []):
+                await self.db.delete(obj)
+            await self.db.flush()
+            for i, obj in enumerate(data["objectives"]):
+                self.db.add(MissionObjective(
+                    mission_id=mission.id,
+                    title=obj["title"],
+                    description=obj.get("description"),
+                    order_index=obj.get("order_index", i),
+                    zone_id=uuid.UUID(obj["zone_id"]) if obj.get("zone_id") else None,
+                    route_id=uuid.UUID(obj["route_id"]) if obj.get("route_id") else None,
+                    facility_id=uuid.UUID(obj["facility_id"]) if obj.get("facility_id") else None,
+                    is_completed=obj.get("is_completed", False),
+                ))
         await self.db.commit()
-        await self.db.refresh(mission)
-        return mission
+        return await self.get_by_id(mission_id)
 
     async def delete(self, mission_id: uuid.UUID) -> bool:
         mission = await self.get_by_id(mission_id)

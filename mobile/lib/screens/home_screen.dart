@@ -20,6 +20,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
+  Future<void> _refresh() async {
+    await context.read<TeamProvider>().loadTeams();
+  }
+
   @override
   Widget build(BuildContext context) {
     final user = context.select<AuthProvider, User?>((a) => a.user);
@@ -27,7 +31,11 @@ class _HomeScreenState extends State<HomeScreen> {
     return Scaffold(
       backgroundColor: const Color(0xFF030712),
       body: SafeArea(
-        child: CustomScrollView(
+        child: RefreshIndicator(
+          color: const Color(0xFF22C55E),
+          backgroundColor: const Color(0xFF0F172A),
+          onRefresh: _refresh,
+          child: CustomScrollView(
           slivers: [
             SliverAppBar(
               backgroundColor: const Color(0xFF0F172A),
@@ -46,7 +54,7 @@ class _HomeScreenState extends State<HomeScreen> {
               actions: [
                 IconButton(
                   icon: const Icon(Icons.notifications_outlined, color: Color(0xFF9CA3AF)),
-                  onPressed: () {},
+                  onPressed: () => Navigator.pushNamed(context, '/notifications'),
                 ),
                 GestureDetector(
                   onTap: () => Navigator.pushNamed(context, '/profile'),
@@ -86,9 +94,9 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ],
+          ),
         ),
       ),
-      bottomNavigationBar: _BottomNav(),
     );
   }
 }
@@ -153,10 +161,8 @@ class _GreetingCard extends StatelessWidget {
 
 class _QuickActions extends StatelessWidget {
   final _actions = const [
-    {'icon': Icons.map_outlined, 'label': 'Live Map', 'route': '/map', 'color': Color(0xFF2563EB)},
-    {'icon': Icons.people_outline, 'label': 'Teams', 'route': '/teams', 'color': Color(0xFF059669)},
-    {'icon': Icons.chat_bubble_outline, 'label': 'Comms', 'route': '/comms', 'color': Color(0xFF7C3AED)},
-    {'icon': Icons.warning_amber_outlined, 'label': 'SOS', 'route': '/sos', 'color': Color(0xFFDC2626)},
+    {'icon': Icons.live_tv,                'label': 'Live Feed',  'route': '/live',       'color': Color(0xFFDC2626)},
+    {'icon': Icons.warning_amber_outlined, 'label': 'SOS',        'route': '/sos',        'color': Color(0xFFB91C1C)},
   ];
 
   const _QuickActions();
@@ -233,40 +239,43 @@ class _TeamsSection extends StatelessWidget {
             child: const Center(child: Text('No teams assigned', style: TextStyle(color: Color(0xFF6B7280), fontSize: 13))),
           )
         else
-          ...teams.take(3).map((t) => Container(
-                margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F172A),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: const Color(0xFF1F2937)),
-                ),
-                child: Row(
-                  children: [
-                    Container(
-                      width: 36,
-                      height: 36,
-                      decoration: BoxDecoration(
-                        color: Color(int.parse(t.color.replaceFirst('#', 'FF'), radix: 16)),
-                        borderRadius: BorderRadius.circular(8),
+          ...teams.take(3).map((t) => GestureDetector(
+                onTap: () => Navigator.pushNamed(context, '/teams/${t.id}'),
+                child: Container(
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF0F172A),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFF1F2937)),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(
+                          color: Color(int.parse(t.color.replaceFirst('#', 'FF'), radix: 16)),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Center(
+                          child: Text(t.name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ),
                       ),
-                      child: Center(
-                        child: Text(t.name[0].toUpperCase(), style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(t.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
+                            Text('${t.memberCount} member${t.memberCount != 1 ? 's' : ''}',
+                                style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 12),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(t.name, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14)),
-                          Text('${t.memberCount} member${t.memberCount != 1 ? 's' : ''}',
-                              style: const TextStyle(color: Color(0xFF6B7280), fontSize: 12)),
-                        ],
-                      ),
-                    ),
-                    const Icon(Icons.chevron_right, color: Color(0xFF374151), size: 20),
-                  ],
+                      const Icon(Icons.chevron_right, color: Color(0xFF374151), size: 20),
+                    ],
+                  ),
                 ),
               )),
       ],
@@ -307,53 +316,3 @@ class _StatusCard extends StatelessWidget {
   }
 }
 
-class _BottomNav extends StatelessWidget {
-  const _BottomNav();
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      height: 64,
-      decoration: const BoxDecoration(
-        color: Color(0xFF0F172A),
-        border: Border(top: BorderSide(color: Color(0xFF1F2937))),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceAround,
-        children: [
-          _NavItem(icon: Icons.home_outlined, label: 'Home', onTap: () {}),
-          _NavItem(icon: Icons.map_outlined, label: 'Map', onTap: () => Navigator.pushNamed(context, '/map')),
-          _NavItem(icon: Icons.crop_free_outlined, label: 'Zones', onTap: () => Navigator.pushNamed(context, '/zones')),
-          _NavItem(icon: Icons.chat_bubble_outline, label: 'Comms', onTap: () => Navigator.pushNamed(context, '/comms')),
-          _NavItem(icon: Icons.person_outline, label: 'Profile', onTap: () => Navigator.pushNamed(context, '/profile')),
-        ],
-      ),
-    );
-  }
-}
-
-class _NavItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final VoidCallback onTap;
-  const _NavItem({required this.icon, required this.label, required this.onTap});
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      behavior: HitTestBehavior.opaque,
-      child: SizedBox(
-        width: 70,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(icon, color: const Color(0xFF6B7280), size: 22),
-            const SizedBox(height: 3),
-            Text(label, style: const TextStyle(color: Color(0xFF6B7280), fontSize: 10)),
-          ],
-        ),
-      ),
-    );
-  }
-}

@@ -5,9 +5,9 @@ import { authApi, mediaUrl } from "../../services/api";
 import {
   MdDashboard, MdMap, MdPeople, MdAssignment, MdRoute,
   MdChat, MdSecurity, MdLogout, MdAdminPanelSettings,
-  MdNotifications, MdEvStation, MdVideocam, MdLocationOn,
-  MdInventory, MdQueryStats, MdWarning, MdHistory, MdDomain, MdCropFree,
-  MdSettings, MdChevronLeft, MdChevronRight,
+  MdNotifications, MdEvStation, MdVideocam,
+  MdQueryStats, MdWarning, MdHistory, MdDomain, MdCropFree,
+  MdSettings, MdChevronLeft, MdChevronRight, MdHub,
 } from "react-icons/md";
 
 // ── Role metadata ─────────────────────────────────────────────────────────
@@ -36,6 +36,7 @@ const NAV_GROUPS = [
     items: [
       { to: "/routes",     icon: MdRoute,         label: "Routes"    },
       { to: "/live-feed",  icon: MdVideocam,      label: "Live Feed" },
+      { to: "/network",    icon: MdHub,           label: "Network"   },
       { to: "/sos",        icon: MdWarning,       label: "SOS",      danger: true },
     ],
     roles: ["all"],
@@ -43,14 +44,12 @@ const NAV_GROUPS = [
   {
     label: "COMMAND",
     items: [
-      { to: "/missions",   icon: MdAssignment,    label: "Missions"   },
-      { to: "/operations", icon: MdEvStation,     label: "Operations" },
-      { to: "/posts",      icon: MdDomain,        label: "Facilities" },
-      { to: "/zones",      icon: MdCropFree,      label: "Zones"      },
-      { to: "/evidence",   icon: MdSecurity,      label: "Evidence"   },
-      { to: "/geofences",  icon: MdLocationOn,    label: "Geofences"  },
-      { to: "/playback",   icon: MdHistory,       label: "Playback"   },
-      { to: "/packages",   icon: MdInventory,     label: "Packages"   },
+      { to: "/missions",   icon: MdAssignment,    label: "Missions",   roles: ["operations_coordinator"] },
+      { to: "/operations", icon: MdEvStation,     label: "Operations", roles: ["operations_coordinator", "planning_officer"] },
+      { to: "/posts",      icon: MdDomain,        label: "Facilities", roles: ["operations_coordinator"] },
+      { to: "/zones",      icon: MdCropFree,      label: "Zones",      roles: ["operations_coordinator", "planning_officer"] },
+      { to: "/evidence",   icon: MdSecurity,      label: "Evidence",   roles: ["operations_coordinator", "planning_officer"] },
+      { to: "/playback",   icon: MdHistory,       label: "Playback",   roles: ["operations_coordinator", "planning_officer"] },
     ],
     roles: ["operations_coordinator", "planning_officer"],
   },
@@ -328,7 +327,11 @@ export default function Sidebar() {
               <div style={{ height: 1, background: "#0d1d0d", margin: "6px 4px" }} />
             )}
 
-            {group.items.map((item) => (
+            {group.items.filter((item) => {
+              const itemRoles = (item as { roles?: string[] }).roles;
+              if (!itemRoles) return true;
+              return user && itemRoles.includes(user.role);
+            }).map((item) => (
               <NavItem key={item.to} {...item} collapsed={collapsed} />
             ))}
           </div>

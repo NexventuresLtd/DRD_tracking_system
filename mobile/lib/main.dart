@@ -9,20 +9,27 @@ import 'providers/route_provider.dart';
 import 'providers/message_provider.dart';
 import 'providers/zone_provider.dart';
 import 'services/storage_service.dart';
+import 'services/push_notification_service.dart';
+import 'providers/connectivity_provider.dart';
+import 'providers/mesh_provider.dart';
+
+/// Global navigator key — import this to navigate from outside the widget tree
+/// (e.g. push-notification tap callbacks).
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize environment - automatically detects flavor from --dart-define
-  // or defaults to development if not specified
   EnvironmentConfig.init();
 
-  // Initialize services
   await StorageService().init();
+  await PushNotificationService.instance.initialize();
 
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider(create: (_) => ConnectivityProvider()),
+        ChangeNotifierProvider(create: (_) => MeshProvider()),
         ChangeNotifierProvider(create: (_) => AuthProvider()),
         ChangeNotifierProvider(create: (_) => LocationProvider()),
         ChangeNotifierProvider(create: (_) => TeamProvider()),

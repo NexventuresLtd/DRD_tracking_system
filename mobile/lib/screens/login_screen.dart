@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../services/permission_service.dart';
 
 enum _Step { credentials, otp }
 
@@ -69,7 +70,39 @@ class _LoginScreenState extends State<LoginScreen> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _otpFocus[0].requestFocus();
       });
+    } else {
+      // Check if this is a "network not joined" error
+      final err = auth.error ?? '';
+      if (err.toLowerCase().contains('voucher') || err.toLowerCase().contains('network')) {
+        _showNetworkJoinDialog();
+      }
     }
+  }
+
+  void _showNetworkJoinDialog() {
+    showDialog(
+      context: context,
+      builder: (_) => AlertDialog(
+        backgroundColor: const Color(0xFF0F172A),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16), side: const BorderSide(color: Color(0xFFDC2626))),
+        title: const Text('Not on Network', style: TextStyle(color: Color(0xFFFCA5A5), fontWeight: FontWeight.bold)),
+        content: const Text(
+          'Your account has not joined the network yet.\n\nScan your coordinator\'s QR code or enter your voucher code to activate your account.',
+          style: TextStyle(color: Color(0xFF9CA3AF), fontSize: 13, height: 1.5),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel', style: TextStyle(color: Color(0xFF6B7280)))),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.pop(context);
+              Navigator.pushNamed(context, '/register');
+            },
+            style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF16A34A), shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8))),
+            child: const Text('Join Network', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _verifyOtp() async {
@@ -81,7 +114,9 @@ class _LoginScreenState extends State<LoginScreen> {
     if (!mounted) return;
     setState(() => _loading = false);
     if (ok) {
-      Navigator.pushReplacementNamed(context, '/home');
+      final permsOk = await PermissionService.instance.allCriticalGranted();
+      if (!mounted) return;
+      Navigator.pushReplacementNamed(context, permsOk ? '/home' : '/permissions');
     } else {
       for (final c in _otpCtrl) { c.clear(); }
       _otpFocus[0].requestFocus();
@@ -206,7 +241,7 @@ class _LoginScreenState extends State<LoginScreen> {
               _DrdButton(label: 'Continue', loading: _loading, onPressed: _submitCredentials),
               const SizedBox(height: 16),
               OutlinedButton.icon(
-                onPressed: () => Navigator.pushNamed(context, '/enroll'),
+                onPressed: () => Navigator.pushNamed(context, '/register'),
                 icon: const Icon(Icons.qr_code_scanner, size: 18),
                 label: const Text('Enroll with QR / Voucher'),
                 style: OutlinedButton.styleFrom(
