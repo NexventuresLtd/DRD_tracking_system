@@ -118,6 +118,31 @@ function fmtDateTime(s?: string) { if (!s) return "—"; return new Date(s).toLo
 const inp: React.CSSProperties = { width: "100%", padding: "8px 10px", background: "#040804", border: "1px solid #1f2d1f", color: "#d1fae5", fontSize: 13, outline: "none", boxSizing: "border-box" };
 const lbl: React.CSSProperties = { fontSize: 10, color: "#4b5563", letterSpacing: 1.5, textTransform: "uppercase" as const, marginBottom: 5, display: "block", fontFamily: "JetBrains Mono, monospace" };
 
+// ── DateTimeInput ─────────────────────────────────────────────────────────────
+
+function DateTimeInput({ value, onChange, style }: { value: string; onChange: (v: string) => void; style?: React.CSSProperties }) {
+  const ref = useRef<HTMLInputElement>(null);
+  return (
+    <div style={{ position: "relative", display: "flex", alignItems: "center" }}>
+      <input
+        ref={ref}
+        type="datetime-local"
+        style={{ ...style, colorScheme: "dark", paddingRight: 36 }}
+        value={value}
+        onChange={e => onChange(e.target.value)}
+      />
+      <button
+        type="button"
+        tabIndex={-1}
+        onClick={() => ref.current?.showPicker?.()}
+        style={{ position: "absolute", right: 8, background: "none", border: "none", cursor: "pointer", color: "#16a34a", display: "flex", alignItems: "center", padding: 0, lineHeight: 1 }}
+      >
+        <MdOutlineSchedule size={16} />
+      </button>
+    </div>
+  );
+}
+
 // ── SearchableMultiSelect ─────────────────────────────────────────────────────
 
 function SearchableMultiSelect<T extends { id: string }>({ label, items, selected, onToggle, renderLabel, accentColor = "#22c55e" }: { label: string; items: T[]; selected: string[]; onToggle: (id: string) => void; renderLabel: (item: T) => string; accentColor?: string; }) {
@@ -400,11 +425,11 @@ function CreateModal({ onClose, onCreated, teams, zones, routes, facilities }: {
             </div>
             <div>
               <label style={lbl}>Start Date</label>
-              <input type="datetime-local" style={inp} value={form.start_date} onChange={e => setForm({ ...form, start_date: e.target.value })} />
+              <DateTimeInput style={inp} value={form.start_date} onChange={v => setForm({ ...form, start_date: v })} />
             </div>
             <div>
               <label style={lbl}>End Date</label>
-              <input type="datetime-local" style={inp} value={form.end_date} onChange={e => setForm({ ...form, end_date: e.target.value })} />
+              <DateTimeInput style={inp} value={form.end_date} onChange={v => setForm({ ...form, end_date: v })} />
             </div>
           </div>
           <div style={{ marginBottom: 14 }}>
@@ -418,7 +443,7 @@ function CreateModal({ onClose, onCreated, teams, zones, routes, facilities }: {
           <div style={{ background: "#030903", border: "1px solid #0f1f0f", padding: "14px 16px", marginBottom: 14 }}>
             <div style={{ color: "#16a34a", fontSize: 9, letterSpacing: 3, marginBottom: 12, fontFamily: "JetBrains Mono, monospace" }}>BRIEFING DETAILS</div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
-              <div><label style={lbl}>Briefing Date & Time</label><input type="datetime-local" style={inp} value={form.briefing_datetime} onChange={e => setForm({ ...form, briefing_datetime: e.target.value })} /></div>
+              <div><label style={lbl}>Briefing Date & Time</label><DateTimeInput style={inp} value={form.briefing_datetime} onChange={v => setForm({ ...form, briefing_datetime: v })} /></div>
               <div><label style={lbl}>Audience</label><select style={{ ...inp }} value={form.briefing_audience} onChange={e => setForm({ ...form, briefing_audience: e.target.value })}><option value="all">All Team Members</option><option value="team_leaders_only">Team Leaders Only</option></select></div>
             </div>
             <div><label style={lbl}>Briefing Notes</label><textarea style={{ ...inp, height: 68, resize: "none" }} value={form.briefing_notes} onChange={e => setForm({ ...form, briefing_notes: e.target.value })} placeholder="ROE, coordinates, comms channels…" /></div>
